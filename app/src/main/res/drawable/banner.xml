@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Баннер 320x180 для списка приложений Android TV -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="320dp"
+    android:height="180dp"
+    android:viewportWidth="320"
+    android:viewportHeight="180">
+
+    <path android:fillColor="#FF0F2027" android:pathData="M0,0h320v180h-320z" />
+    <path android:fillColor="#FF203A43" android:pathData="M0,120 L320,60 L320,180 L0,180z" />
+
+    <!-- Экран -->
+    <path android:fillColor="#FF4FC3F7"
+        android:pathData="M100,40h120a10,10 0,0 1,10 10v66a10,10 0,0 1,-10 10h-120a10,10 0,0 1,-10 -10v-66a10,10 0,0 1,10 -10z" />
+    <path android:fillColor="#FF0F2027"
+        android:pathData="M106,46h108a6,6 0,0 1,6 6v62a6,6 0,0 1,-6 6h-108a6,6 0,0 1,-6 -6v-62a6,6 0,0 1,6 -6z" />
+
+    <!-- Плитки на экране -->
+    <path android:fillColor="#FF4FC3F7" android:pathData="M114,58h40v24h-40z" />
+    <path android:fillColor="#99FFFFFF" android:pathData="M162,58h44v24h-44z" />
+    <path android:fillColor="#66FFFFFF" android:pathData="M114,90h28v20h-28z" />
+    <path android:fillColor="#66FFFFFF" android:pathData="M146,90h28v20h-28z" />
+    <path android:fillColor="#66FFFFFF" android:pathData="M178,90h28v20h-28z" />
+
+    <!-- Подставка -->
+    <path android:fillColor="#FF4FC3F7" android:pathData="M140,128h40v8h-40z" />
+    <path android:fillColor="#FF4FC3F7" android:pathData="M126,138h68v6h-68z" />
+</vector>
