@@ -393,6 +393,11 @@ public class MainActivity extends Activity {
         cardBg.setColor(0x33FFFFFF);
         card.setBackground(cardBg);
         card.setClipToOutline(true);
+        // Рамка выделения рисуется ПОВЕРХ картинки
+        final GradientDrawable ring = new GradientDrawable();
+        ring.setCornerRadius(dp(10));
+        ring.setColor(0x00000000);
+        card.setForeground(ring);
 
         ImageView img = new ImageView(this);
         if (app.banner != null) {
@@ -417,10 +422,8 @@ public class MainActivity extends Activity {
         tile.addView(label, new LinearLayout.LayoutParams(width, ViewGroup.LayoutParams.WRAP_CONTENT));
 
         tile.setOnFocusChangeListener((v, focused) -> {
-            cardBg.setStroke(focused ? dp(3) : 0, focused ? accent : 0x00000000);
-            label.setAlpha(focused ? 1f : 0.7f);
-            v.setTranslationZ(focused ? dp(8) : 0);
-            v.animate().scaleX(focused ? 1.1f : 1f).scaleY(focused ? 1.1f : 1f)
+            highlight(card, ring, label, focused, accent, 0.7f);
+            v.animate().scaleX(focused ? 1.15f : 1f).scaleY(focused ? 1.15f : 1f)
                     .setDuration(150).start();
         });
         tile.setOnClickListener(v -> launch(app));
@@ -454,6 +457,11 @@ public class MainActivity extends Activity {
         cardBg.setColor(0x33FFFFFF);
         card.setBackground(cardBg);
         card.setClipToOutline(true);
+        // Рамка выделения рисуется ПОВЕРХ картинки
+        final GradientDrawable ring = new GradientDrawable();
+        ring.setCornerRadius(dp(10));
+        ring.setColor(0x00000000);
+        card.setForeground(ring);
 
         ImageView img = new ImageView(this);
         img.setScaleType(ImageView.ScaleType.CENTER_CROP);
@@ -492,10 +500,8 @@ public class MainActivity extends Activity {
         tile.addView(channel, new LinearLayout.LayoutParams(width, ViewGroup.LayoutParams.WRAP_CONTENT));
 
         tile.setOnFocusChangeListener((v, focused) -> {
-            cardBg.setStroke(focused ? dp(3) : 0, focused ? accent : 0x00000000);
-            title.setAlpha(focused ? 1f : 0.75f);
-            v.setTranslationZ(focused ? dp(8) : 0);
-            v.animate().scaleX(focused ? 1.1f : 1f).scaleY(focused ? 1.1f : 1f)
+            highlight(card, ring, title, focused, accent, 0.75f);
+            v.animate().scaleX(focused ? 1.15f : 1f).scaleY(focused ? 1.15f : 1f)
                     .setDuration(150).start();
         });
         tile.setOnClickListener(v -> openVideo(video, false));
@@ -511,6 +517,18 @@ public class MainActivity extends Activity {
             return false;
         });
         return tile;
+    }
+
+    /** Выделение плитки в фокусе: яркая рамка поверх картинки, подсветка, тень, подпись цветом темы. */
+    private void highlight(FrameLayout card, GradientDrawable ring, TextView label,
+                           boolean focused, int accent, float normalAlpha) {
+        ring.setStroke(focused ? dp(4) : 0, focused ? accent : 0x00000000);
+        ring.setColor(focused ? 0x1AFFFFFF : 0x00000000);
+        card.setElevation(focused ? dp(16) : 0);
+        ((View) card.getParent()).setTranslationZ(focused ? dp(16) : 0);
+        label.setAlpha(focused ? 1f : normalAlpha);
+        label.setTextColor(focused ? accent : 0xFFFFFFFF);
+        label.setTypeface(null, focused ? Typeface.BOLD : Typeface.NORMAL);
     }
 
     private LinearLayout.LayoutParams tileParams() {
