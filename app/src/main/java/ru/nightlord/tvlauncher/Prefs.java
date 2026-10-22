@@ -195,6 +195,54 @@ final class Prefs {
         sp.edit().putString("yt_player", pkg).apply();
     }
 
+    // ---- Категории ----
+
+    /** 0 — все вместе, 1 — разделы по категориям, 2 — папки. */
+    int groupMode() {
+        return sp.getInt("group_mode", 1);
+    }
+
+    void setGroupMode(int m) {
+        sp.edit().putInt("group_mode", m).apply();
+    }
+
+    /** Категория, выбранная вручную (null — определять автоматически). */
+    String categoryOverride(String pkg) {
+        try {
+            JSONObject o = new JSONObject(sp.getString("cat_over", "{}"));
+            return o.has(pkg) ? o.getString(pkg) : null;
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    void setCategoryOverride(String pkg, String category) {
+        try {
+            JSONObject o = new JSONObject(sp.getString("cat_over", "{}"));
+            if (category == null) o.remove(pkg);
+            else o.put(pkg, category);
+            sp.edit().putString("cat_over", o.toString()).apply();
+        } catch (Exception ignored) {
+        }
+    }
+
+    List<String> customCategories() {
+        List<String> out = new ArrayList<>();
+        try {
+            JSONArray a = new JSONArray(sp.getString("cat_custom", "[]"));
+            for (int i = 0; i < a.length(); i++) out.add(a.getString(i));
+        } catch (Exception ignored) {
+        }
+        return out;
+    }
+
+    void addCustomCategory(String name) {
+        List<String> l = customCategories();
+        if (l.contains(name)) return;
+        l.add(name);
+        sp.edit().putString("cat_custom", new JSONArray(l).toString()).apply();
+    }
+
     // ---- Обновления ----
 
     long lastUpdateCheck() {

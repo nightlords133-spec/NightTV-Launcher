@@ -2,9 +2,11 @@ package ru.nightlord.tvlauncher;
 
 import android.content.Context;
 import android.content.Intent;
+import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageManager;
 import android.content.pm.ResolveInfo;
 import android.graphics.drawable.Drawable;
+import android.os.Build;
 
 import java.text.Collator;
 import java.util.ArrayList;
@@ -54,6 +56,13 @@ final class AppRepository {
             a.activity = ri.activityInfo.name;
             a.leanback = leanback;
             a.label = String.valueOf(ri.loadLabel(pm));
+            ApplicationInfo ai = ri.activityInfo.applicationInfo;
+            if (ai != null) {
+                a.system = (ai.flags & ApplicationInfo.FLAG_SYSTEM) != 0
+                        && (ai.flags & ApplicationInfo.FLAG_UPDATED_SYSTEM_APP) == 0;
+                a.game = isGame(ai);
+                if (Build.VERSION.SDK_INT >= 26) a.sysCategory = ai.category;
+            }
 
             Drawable banner = null;
             try {
@@ -70,5 +79,10 @@ final class AppRepository {
             }
             out.put(pkg, a);
         }
+    }
+
+    @SuppressWarnings("deprecation")
+    private static boolean isGame(ApplicationInfo ai) {
+        return (ai.flags & ApplicationInfo.FLAG_IS_GAME) != 0;
     }
 }

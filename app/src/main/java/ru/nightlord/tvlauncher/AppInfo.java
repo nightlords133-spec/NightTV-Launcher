@@ -10,4 +10,7 @@ final class AppInfo {
     boolean leanback;
     Drawable banner; // 16:9, может быть null
     Drawable icon;
+    boolean system;
+    boolean game;
+    int sysCategory = -1;
 }

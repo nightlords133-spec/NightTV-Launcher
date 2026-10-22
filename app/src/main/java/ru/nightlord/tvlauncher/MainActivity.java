@@ -100,6 +100,9 @@ public class MainActivity extends Activity {
     private ScrollView scroll;
     private LinearLayout favRow;
     private LinearLayout grid;
+    private TextView allTitle;
+    private android.app.Dialog folderDialog;
+    private static final String[] GROUP_MODES = {"Все вместе", "Разделы по категориям", "Папки"};
     private TextView favHint;
     private TextView recentTitle;
     private View recentScroll;
@@ -260,7 +263,8 @@ public class MainActivity extends Activity {
         trScroll = wrapRow(trRow);
         column.addView(trScroll);
 
-        column.addView(sectionTitle("Все приложения"));
+        allTitle = sectionTitle("Все приложения");
+        column.addView(allTitle);
         grid = new LinearLayout(this);
         grid.setOrientation(LinearLayout.VERTICAL);
         grid.setClipChildren(false);
@@ -595,18 +599,26 @@ public class MainActivity extends Activity {
 
         renderYouTube(width);
 
-        int cols = prefs.columns();
-        LinearLayout row = null;
-        for (int i = 0; i < visible.size(); i++) {
-            if (i % cols == 0) {
-                row = new LinearLayout(this);
-                row.setOrientation(LinearLayout.HORIZONTAL);
-                row.setClipChildren(false);
-                row.setClipToPadding(false);
-                grid.addView(row);
+        if (folderDialog != null && folderDialog.isShowing()) folderDialog.dismiss();
+        int mode = prefs.groupMode();
+        allTitle.setVisibility(mode == 1 ? View.GONE : View.VISIBLE);
+        if (mode == 0) {
+            addGrid(grid, visible, width, TAG_ALL);
+        } else {
+            Map<String, List<AppInfo>> groups = groupApps(visible);
+            if (mode == 1) {
+                for (Map.Entry<String, List<AppInfo>> e : groups.entrySet()) {
+                    TextView t = sectionTitle(e.getKey() + "  ·  " + e.getValue().size());
+                    grid.addView(t);
+                    addGrid(grid, e.getValue(), width, TAG_ALL);
+                }
+            } else {
+                List<View> folders = new ArrayList<>();
+                for (Map.Entry<String, List<AppInfo>> e : groups.entrySet()) {
+                    folders.add(makeFolderTile(e.getKey(), e.getValue(), width));
+                }
+                addRows(grid, folders);
             }
-            AppInfo a = visible.get(i);
-            row.addView(makeTile(a, width, TAG_ALL + a.pkg), tileParams());
         }
 
         View target = pendingFocus != null ? root.findViewWithTag(pendingFocus) : null;
@@ -618,15 +630,235 @@ public class MainActivity extends Activity {
         }
     }
 
+    // ------------------------------------------------------------ категории и папки
+
+    private String categoryOf(AppInfo a) {
+        String c = prefs.categoryOverride(a.pkg);
+        return c != null ? c : Categories.auto(a);
+    }
+
+    private List<String> allCategories() {
+        List<String> out = new ArrayList<>(java.util.Arrays.asList(Categories.DEFAULTS));
+        for (String c : prefs.customCategories()) if (!out.contains(c)) out.add(c);
+        return out;
+    }
+
+    /** Группы в постоянном порядке: стандартные, затем свои; пустые пропускаются. */
+    private Map<String, List<AppInfo>> groupApps(List<AppInfo> list) {
+        Map<String, List<AppInfo>> byCat = new java.util.LinkedHashMap<>();
+        for (String c : allCategories()) byCat.put(c, new ArrayList<>());
+        for (AppInfo a : list) {
+            String c = categoryOf(a);
+            if (!byCat.containsKey(c)) byCat.put(c, new ArrayList<>());
+            byCat.get(c).add(a);
+        }
+        // «Другое» всегда в конце
+        List<AppInfo> other = byCat.remove(Categories.OTHER);
+        byCat.put(Categories.OTHER, other != null ? other : new ArrayList<>());
+        Map<String, List<AppInfo>> out = new java.util.LinkedHashMap<>();
+        for (Map.Entry<String, List<AppInfo>> e : byCat.entrySet()) {
+            if (!e.getValue().isEmpty()) out.put(e.getKey(), e.getValue());
+        }
+        return out;
+    }
+
+    private void addGrid(LinearLayout target, List<AppInfo> list, int width, String tagPrefix) {
+        List<View> tiles = new ArrayList<>();
+        for (AppInfo a : list) tiles.add(makeTile(a, width, tagPrefix + a.pkg));
+        addRows(target, tiles);
+    }
+
+    private void addRows(LinearLayout target, List<View> tiles) {
+        int cols = prefs.columns();
+        LinearLayout row = null;
+        for (int i = 0; i < tiles.size(); i++) {
+            if (i % cols == 0) {
+                row = new LinearLayout(this);
+                row.setOrientation(LinearLayout.HORIZONTAL);
+                row.setClipChildren(false);
+                row.setClipToPadding(false);
+                target.addView(row);
+            }
+            row.addView(tiles.get(i), tileParams());
+        }
+    }
+
+    private View makeFolderTile(final String category, final List<AppInfo> list, int width) {
+        final int accent = Themes.accent(prefs.theme());
+        int height = width * 9 / 16;
+
+        LinearLayout tile = new LinearLayout(this);
+        tile.setOrientation(LinearLayout.VERTICAL);
+        tile.setFocusable(true);
+        tile.setClickable(true);
+        tile.setTag("dir:" + category);
+
+        FrameLayout card = new FrameLayout(this);
+        GradientDrawable cardBg = new GradientDrawable();
+        cardBg.setCornerRadius(dp(10));
+        cardBg.setColor(0x40FFFFFF);
+        card.setBackground(cardBg);
+        card.setClipToOutline(true);
+        final GradientDrawable ring = new GradientDrawable();
+        ring.setCornerRadius(dp(10));
+        ring.setColor(0x00000000);
+        card.setForeground(ring);
+
+        // Слева значок папки, справа до 4 иконок приложений
+        LinearLayout inner = new LinearLayout(this);
+        inner.setOrientation(LinearLayout.HORIZONTAL);
+        inner.setGravity(Gravity.CENTER);
+        TextView emoji = new TextView(this);
+        emoji.setText(Categories.icon(category));
+        emoji.setTextSize(TypedValue.COMPLEX_UNIT_PX, height * 0.42f);
+        emoji.setPadding(0, 0, dp(10), 0);
+        inner.addView(emoji);
+
+        android.widget.GridLayout icons = new android.widget.GridLayout(this);
+        icons.setColumnCount(2);
+        int iconSize = (int) (height * 0.3f);
+        for (int i = 0; i < Math.min(4, list.size()); i++) {
+            ImageView iv = new ImageView(this);
+            iv.setImageDrawable(list.get(i).icon);
+            iv.setScaleType(ImageView.ScaleType.FIT_CENTER);
+            android.widget.GridLayout.LayoutParams lp = new android.widget.GridLayout.LayoutParams();
+            lp.width = iconSize;
+            lp.height = iconSize;
+            lp.setMargins(dp(2), dp(2), dp(2), dp(2));
+            icons.addView(iv, lp);
+        }
+        inner.addView(icons);
+        card.addView(inner, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        tile.addView(card, new LinearLayout.LayoutParams(width, height));
+
+        final TextView label = text(14, 0.7f);
+        label.setText(category + " · " + list.size());
+        label.setSingleLine(true);
+        label.setEllipsize(TextUtils.TruncateAt.END);
+        label.setGravity(Gravity.CENTER_HORIZONTAL);
+        label.setPadding(0, dp(8), 0, 0);
+        tile.addView(label, new LinearLayout.LayoutParams(width, ViewGroup.LayoutParams.WRAP_CONTENT));
+
+        tile.setOnFocusChangeListener((v, focused) -> {
+            highlight(card, ring, label, focused, accent, 0.7f);
+            v.animate().scaleX(focused ? 1.15f : 1f).scaleY(focused ? 1.15f : 1f)
+                    .setDuration(150).start();
+        });
+        tile.setOnClickListener(v -> openFolder(category, list));
+        return tile;
+    }
+
+    private void openFolder(String category, List<AppInfo> list) {
+        if (folderDialog != null && folderDialog.isShowing()) folderDialog.dismiss();
+        android.app.Dialog dlg = new android.app.Dialog(this, android.R.style.Theme_DeviceDefault_NoActionBar_Fullscreen);
+
+        ScrollView sv = new ScrollView(this);
+        sv.setClipChildren(false);
+        sv.setBackgroundColor(0xE6101418);
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setClipChildren(false);
+        box.setClipToPadding(false);
+        box.setPadding(dp(48), dp(27), dp(48), dp(27));
+
+        TextView title = text(30, 1f);
+        title.setText(Categories.icon(category) + "  " + category);
+        title.setTypeface(Typeface.DEFAULT_BOLD);
+        title.setPadding(0, 0, 0, dp(4));
+        box.addView(title);
+        TextView hint = text(14, 0.5f);
+        hint.setText("«Назад» — закрыть папку · удерживать ОК — сменить категорию");
+        hint.setPadding(0, 0, 0, dp(16));
+        box.addView(hint);
+
+        addGrid(box, list, tileWidth(), "fld:");
+        sv.addView(box);
+        dlg.setContentView(sv);
+        folderDialog = dlg;
+        dlg.setOnShowListener(d -> {
+            for (int i = 0; i < box.getChildCount(); i++) {
+                View row = box.getChildAt(i);
+                if (row instanceof LinearLayout && ((ViewGroup) row).getChildCount() > 0) {
+                    ((ViewGroup) row).getChildAt(0).requestFocus();
+                    break;
+                }
+            }
+        });
+        dlg.show();
+    }
+
+    private void chooseCategory(final AppInfo app) {
+        final List<String> cats = allCategories();
+        final String current = categoryOf(app);
+        final List<String> labels = new ArrayList<>();
+        for (String c : cats) labels.add((c.equals(current) ? "✓ " : "    ") + c);
+        labels.add("＋ Новая категория…");
+        labels.add("Определять автоматически (" + Categories.auto(app) + ")");
+
+        dialog().setTitle("Категория: " + app.label)
+                .setItems(labels.toArray(new String[0]), (d, which) -> {
+                    if (which < cats.size()) {
+                        prefs.setCategoryOverride(app.pkg, cats.get(which));
+                        render();
+                    } else if (which == cats.size()) {
+                        newCategory(app);
+                    } else {
+                        prefs.setCategoryOverride(app.pkg, null);
+                        render();
+                    }
+                })
+                .show();
+    }
+
+    private void newCategory(final AppInfo app) {
+        final EditText input = new EditText(this);
+        input.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_SENTENCES);
+        input.setSingleLine(true);
+        input.setHint("Например: Детям");
+        FrameLayout box = new FrameLayout(this);
+        box.setPadding(dp(24), dp(8), dp(24), 0);
+        box.addView(input);
+        dialog().setTitle("Новая категория")
+                .setView(box)
+                .setPositiveButton("Создать", (d, w) -> {
+                    String name = input.getText().toString().trim();
+                    if (name.isEmpty()) return;
+                    prefs.addCustomCategory(name);
+                    prefs.setCategoryOverride(app.pkg, name);
+                    render();
+                })
+                .setNegativeButton("Отмена", null)
+                .show();
+    }
+
+    private void chooseGroupMode() {
+        dialog().setTitle("Вид списка приложений")
+                .setSingleChoiceItems(GROUP_MODES, prefs.groupMode(), (d, which) -> {
+                    prefs.setGroupMode(which);
+                    pendingFocus = "settings";
+                    render();
+                    d.dismiss();
+                })
+                .show();
+    }
+
     private void focusFirstTile() {
         if (favRow != null && favRow.getChildCount() > 0) {
             favRow.getChildAt(0).requestFocus();
-        } else if (grid != null && grid.getChildCount() > 0) {
-            View firstRow = grid.getChildAt(0);
-            if (firstRow instanceof ViewGroup && ((ViewGroup) firstRow).getChildCount() > 0) {
-                ((ViewGroup) firstRow).getChildAt(0).requestFocus();
+            return;
+        }
+        if (grid != null) {
+            for (int i = 0; i < grid.getChildCount(); i++) {
+                View row = grid.getChildAt(i);
+                if (row instanceof LinearLayout && ((ViewGroup) row).getChildCount() > 0
+                        && ((ViewGroup) row).getChildAt(0).isFocusable()) {
+                    ((ViewGroup) row).getChildAt(0).requestFocus();
+                    return;
+                }
             }
-        } else if (settingsButton != null) {
+        }
+        if (settingsButton != null) {
             settingsButton.requestFocus();
         }
     }
@@ -661,6 +893,7 @@ public class MainActivity extends Activity {
 
     private void launch(AppInfo app) {
         prefs.pushRecent(app.pkg);
+        if (folderDialog != null && folderDialog.isShowing()) folderDialog.dismiss();
         Intent i = new Intent(Intent.ACTION_MAIN);
         i.addCategory(app.leanback ? Intent.CATEGORY_LEANBACK_LAUNCHER : Intent.CATEGORY_LAUNCHER);
         i.setComponent(new ComponentName(app.pkg, app.activity));
@@ -730,6 +963,9 @@ public class MainActivity extends Activity {
             });
         }
 
+        labels.add("Категория: " + categoryOf(app) + "…");
+        actions.add(() -> chooseCategory(app));
+
         labels.add("Скрыть с главного экрана");
         actions.add(() -> {
             prefs.hide(app.pkg);
@@ -757,6 +993,7 @@ public class MainActivity extends Activity {
         String[] items = {
                 "Тема: " + Themes.NAMES[Themes.safe(prefs.theme())],
                 "Колонок в сетке: " + prefs.columns(),
+                "Вид приложений: " + GROUP_MODES[Math.max(0, Math.min(2, prefs.groupMode()))],
                 "Погода: " + weather,
                 "YouTube…",
                 "Скрытые приложения (" + prefs.hidden().size() + ")",
@@ -770,17 +1007,18 @@ public class MainActivity extends Activity {
                     switch (which) {
                         case 0: chooseTheme(); break;
                         case 1: chooseColumns(); break;
-                        case 2: chooseCity(); break;
-                        case 3: showYouTubeSettings(); break;
-                        case 4: chooseHidden(); break;
-                        case 5:
+                        case 2: chooseGroupMode(); break;
+                        case 3: chooseCity(); break;
+                        case 4: showYouTubeSettings(); break;
+                        case 5: chooseHidden(); break;
+                        case 6:
                             prefs.clearRecents();
                             pendingFocus = "settings";
                             render();
                             toast("Список недавних очищен");
                             break;
-                        case 6: checkUpdates(true); break;
-                        case 7: safeStart(new Intent(Settings.ACTION_SETTINGS)
+                        case 7: checkUpdates(true); break;
+                        case 8: safeStart(new Intent(Settings.ACTION_SETTINGS)
                                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)); break;
                         default: showAbout(); break;
                     }
