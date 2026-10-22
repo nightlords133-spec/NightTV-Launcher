@@ -55,9 +55,42 @@ public class MainActivity extends Activity {
     private static final String TAG_FAV = "fav:";
     private static final String TAG_REC = "rec:";
     private static final String TAG_ALL = "all:";
+    private static final String TAG_YT = "yt:";
+    private static final String TAG_TR = "tr:";
+    private static final long YT_PERIOD_MS = 30 * 60 * 1000L;
+    private static final String YT_REGION = "RU";
+
+    /** Плееры YouTube в порядке предпочтения для режима «Автоматически». */
+    private static final String[] YT_PLAYERS = {
+            "com.google.android.youtube.tv",
+            "com.liskovsoft.smarttubetv.beta",
+            "com.liskovsoft.smarttubetv",
+            "org.smarttube.stable",
+            "org.smarttube.beta",
+            "com.google.android.youtube",
+    };
 
     private final Handler ui = new Handler(Looper.getMainLooper());
     private final ExecutorService worker = Executors.newSingleThreadExecutor();
+    private final ExecutorService ytWorker = Executors.newSingleThreadExecutor();
+    private final ImageLoader images = new ImageLoader();
+
+    // YouTube: данные рядов и их состояние
+    private List<Video> ytVideos = new ArrayList<>();
+    private List<Video> trVideos = new ArrayList<>();
+    private String ytError;
+    private String trError;
+    private boolean ytLoading;
+    private long ytLastLoad;
+
+    private TextView ytTitle;
+    private TextView ytHint;
+    private View ytScroll;
+    private LinearLayout ytRow;
+    private TextView trTitle;
+    private TextView trHint;
+    private View trScroll;
+    private LinearLayout trRow;
 
     private Prefs prefs;
     private AppRepository repo;
@@ -118,6 +151,7 @@ public class MainActivity extends Activity {
         if (System.currentTimeMillis() - prefs.lastUpdateCheck() > UPDATE_PERIOD_MS) {
             checkUpdates(false);
         }
+        loadYouTube(false);
     }
 
     @Override
@@ -137,6 +171,8 @@ public class MainActivity extends Activity {
             }
         }
         worker.shutdownNow();
+        ytWorker.shutdownNow();
+        images.shutdown();
     }
 
     /** Нажали «Домой», уже находясь на домашнем экране — вернуться наверх. */
@@ -205,6 +241,24 @@ public class MainActivity extends Activity {
         recentRow = newRow();
         recentScroll = wrapRow(recentRow);
         column.addView(recentScroll);
+
+        ytTitle = sectionTitle("YouTube · новое на ваших каналах");
+        column.addView(ytTitle);
+        ytHint = text(15, 0.6f);
+        ytHint.setPadding(0, dp(4), 0, dp(12));
+        column.addView(ytHint);
+        ytRow = newRow();
+        ytScroll = wrapRow(ytRow);
+        column.addView(ytScroll);
+
+        trTitle = sectionTitle("YouTube · в тренде");
+        column.addView(trTitle);
+        trHint = text(15, 0.6f);
+        trHint.setPadding(0, dp(4), 0, dp(12));
+        column.addView(trHint);
+        trRow = newRow();
+        trScroll = wrapRow(trRow);
+        column.addView(trScroll);
 
         column.addView(sectionTitle("Все приложения"));
         grid = new LinearLayout(this);
@@ -384,6 +438,81 @@ public class MainActivity extends Activity {
         return tile;
     }
 
+    private View makeVideoTile(Video video, int width, String tag) {
+        final int accent = Themes.accent(prefs.theme());
+        int height = width * 9 / 16;
+
+        LinearLayout tile = new LinearLayout(this);
+        tile.setOrientation(LinearLayout.VERTICAL);
+        tile.setFocusable(true);
+        tile.setClickable(true);
+        tile.setTag(tag);
+
+        FrameLayout card = new FrameLayout(this);
+        final GradientDrawable cardBg = new GradientDrawable();
+        cardBg.setCornerRadius(dp(10));
+        cardBg.setColor(0x33FFFFFF);
+        card.setBackground(cardBg);
+        card.setClipToOutline(true);
+
+        ImageView img = new ImageView(this);
+        img.setScaleType(ImageView.ScaleType.CENTER_CROP);
+        card.addView(img, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        images.load(video.thumb, img);
+
+        TextView play = new TextView(this);
+        play.setText("▶");
+        play.setTextColor(0xEEFFFFFF);
+        play.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
+        play.setPadding(dp(8), dp(2), dp(8), dp(2));
+        GradientDrawable playBg = new GradientDrawable();
+        playBg.setCornerRadius(dp(6));
+        playBg.setColor(0xCCE53935);
+        play.setBackground(playBg);
+        FrameLayout.LayoutParams playLp = new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+                Gravity.BOTTOM | Gravity.END);
+        playLp.setMargins(0, 0, dp(6), dp(6));
+        card.addView(play, playLp);
+
+        tile.addView(card, new LinearLayout.LayoutParams(width, height));
+
+        final TextView title = text(14, 0.75f);
+        title.setText(video.title);
+        title.setMaxLines(2);
+        title.setEllipsize(TextUtils.TruncateAt.END);
+        title.setPadding(0, dp(8), 0, 0);
+        tile.addView(title, new LinearLayout.LayoutParams(width, ViewGroup.LayoutParams.WRAP_CONTENT));
+
+        TextView channel = text(12, 0.5f);
+        channel.setText(video.channel);
+        channel.setSingleLine(true);
+        channel.setEllipsize(TextUtils.TruncateAt.END);
+        tile.addView(channel, new LinearLayout.LayoutParams(width, ViewGroup.LayoutParams.WRAP_CONTENT));
+
+        tile.setOnFocusChangeListener((v, focused) -> {
+            cardBg.setStroke(focused ? dp(3) : 0, focused ? accent : 0x00000000);
+            title.setAlpha(focused ? 1f : 0.75f);
+            v.setTranslationZ(focused ? dp(8) : 0);
+            v.animate().scaleX(focused ? 1.1f : 1f).scaleY(focused ? 1.1f : 1f)
+                    .setDuration(150).start();
+        });
+        tile.setOnClickListener(v -> openVideo(video, false));
+        tile.setOnLongClickListener(v -> {
+            showVideoMenu(video);
+            return true;
+        });
+        tile.setOnKeyListener((v, keyCode, event) -> {
+            if (keyCode == KeyEvent.KEYCODE_MENU) {
+                if (event.getAction() == KeyEvent.ACTION_UP) showVideoMenu(video);
+                return true;
+            }
+            return false;
+        });
+        return tile;
+    }
+
     private LinearLayout.LayoutParams tileParams() {
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
@@ -445,6 +574,8 @@ public class MainActivity extends Activity {
         int recVis = recCount == 0 ? View.GONE : View.VISIBLE;
         recentTitle.setVisibility(recVis);
         recentScroll.setVisibility(recVis);
+
+        renderYouTube(width);
 
         int cols = prefs.columns();
         LinearLayout row = null;
@@ -609,6 +740,7 @@ public class MainActivity extends Activity {
                 "Тема: " + Themes.NAMES[Themes.safe(prefs.theme())],
                 "Колонок в сетке: " + prefs.columns(),
                 "Погода: " + weather,
+                "YouTube…",
                 "Скрытые приложения (" + prefs.hidden().size() + ")",
                 "Очистить «Недавние»",
                 "Проверить обновления",
@@ -621,18 +753,336 @@ public class MainActivity extends Activity {
                         case 0: chooseTheme(); break;
                         case 1: chooseColumns(); break;
                         case 2: chooseCity(); break;
-                        case 3: chooseHidden(); break;
-                        case 4:
+                        case 3: showYouTubeSettings(); break;
+                        case 4: chooseHidden(); break;
+                        case 5:
                             prefs.clearRecents();
                             pendingFocus = "settings";
                             render();
                             toast("Список недавних очищен");
                             break;
-                        case 5: checkUpdates(true); break;
-                        case 6: safeStart(new Intent(Settings.ACTION_SETTINGS)
+                        case 6: checkUpdates(true); break;
+                        case 7: safeStart(new Intent(Settings.ACTION_SETTINGS)
                                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)); break;
                         default: showAbout(); break;
                     }
+                })
+                .show();
+    }
+
+    // ------------------------------------------------------------ YouTube
+
+    private String ytKey() {
+        String own = prefs.ytKey().trim();
+        return own.isEmpty() ? BuildConfig.YT_API_KEY : own;
+    }
+
+    private void loadYouTube(boolean force) {
+        if (!prefs.ytShow() || ytLoading) return;
+        if (!force && System.currentTimeMillis() - ytLastLoad < YT_PERIOD_MS) return;
+        final List<YouTubeClient.Channel> channels = prefs.ytChannels();
+        final String key = ytKey();
+        if (channels.isEmpty() && key.isEmpty()) return;
+
+        ytLoading = true;
+        ytWorker.execute(() -> {
+            List<Video> fromChannels = new ArrayList<>();
+            List<Video> trending = new ArrayList<>();
+            String chErr = null;
+            String trErr = null;
+            if (!channels.isEmpty()) {
+                fromChannels = YouTubeClient.latestFromChannels(channels, 20);
+                if (fromChannels.isEmpty()) chErr = "Не удалось загрузить видео. Проверьте интернет.";
+            }
+            if (!key.isEmpty()) {
+                try {
+                    trending = YouTubeClient.trending(key, YT_REGION);
+                } catch (Exception e) {
+                    trErr = "Не удалось загрузить тренды: " + e.getMessage();
+                }
+            }
+            final List<Video> a = fromChannels;
+            final List<Video> b = trending;
+            final String ea = chErr;
+            final String eb = trErr;
+            ui.post(() -> {
+                ytLoading = false;
+                ytLastLoad = System.currentTimeMillis();
+                if (!a.isEmpty() || ea != null || channels.isEmpty()) {
+                    ytVideos = a;
+                    ytError = ea;
+                }
+                if (!b.isEmpty() || eb != null || key.isEmpty()) {
+                    trVideos = b;
+                    trError = eb;
+                }
+                render();
+            });
+        });
+    }
+
+    private void renderYouTube(int width) {
+        ytRow.removeAllViews();
+        trRow.removeAllViews();
+
+        boolean show = prefs.ytShow();
+
+        // Новое на каналах
+        boolean noChannels = prefs.ytChannels().isEmpty();
+        for (Video v : ytVideos) ytRow.addView(makeVideoTile(v, width, TAG_YT + v.id), tileParams());
+        ytTitle.setVisibility(show ? View.VISIBLE : View.GONE);
+        if (!show) {
+            ytHint.setVisibility(View.GONE);
+        } else if (noChannels) {
+            ytHint.setText("Добавьте любимые каналы: ⚙ Настройки → YouTube… → Мои каналы");
+            ytHint.setVisibility(View.VISIBLE);
+        } else if (ytVideos.isEmpty()) {
+            ytHint.setText(ytError != null ? ytError : "Загрузка…");
+            ytHint.setVisibility(View.VISIBLE);
+        } else {
+            ytHint.setVisibility(View.GONE);
+        }
+        ytScroll.setVisibility(show && !ytVideos.isEmpty() ? View.VISIBLE : View.GONE);
+
+        // Тренды — только если есть ключ
+        boolean hasKey = !ytKey().isEmpty();
+        for (Video v : trVideos) trRow.addView(makeVideoTile(v, width, TAG_TR + v.id), tileParams());
+        boolean trShow = show && hasKey;
+        trTitle.setVisibility(trShow ? View.VISIBLE : View.GONE);
+        if (trShow && trVideos.isEmpty()) {
+            trHint.setText(trError != null ? trError : "Загрузка…");
+            trHint.setVisibility(View.VISIBLE);
+        } else {
+            trHint.setVisibility(View.GONE);
+        }
+        trScroll.setVisibility(trShow && !trVideos.isEmpty() ? View.VISIBLE : View.GONE);
+    }
+
+    private Intent videoIntent(Video v) {
+        return new Intent(Intent.ACTION_VIEW, Uri.parse("https://www.youtube.com/watch?v=" + v.id))
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+    }
+
+    private boolean canHandle(Intent base, String pkg) {
+        Intent probe = new Intent(base).setPackage(pkg);
+        try {
+            return !getPackageManager().queryIntentActivities(probe, 0).isEmpty();
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    private void openVideo(Video v, boolean choose) {
+        Intent i = videoIntent(v);
+        if (choose) {
+            safeStart(Intent.createChooser(i, "Открыть видео в…").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+            return;
+        }
+        String chosen = prefs.ytPlayer();
+        if (!chosen.isEmpty() && canHandle(i, chosen)) {
+            i.setPackage(chosen);
+        } else {
+            for (String pkg : YT_PLAYERS) {
+                if (canHandle(i, pkg)) {
+                    i.setPackage(pkg);
+                    break;
+                }
+            }
+        }
+        try {
+            startActivity(i);
+        } catch (Exception e) {
+            i.setPackage(null);
+            safeStart(i);
+        }
+    }
+
+    private void showVideoMenu(Video v) {
+        String[] items = {"Смотреть", "Открыть в другом приложении…"};
+        dialog().setTitle(v.title)
+                .setItems(items, (d, which) -> openVideo(v, which == 1))
+                .show();
+    }
+
+    private void showYouTubeSettings() {
+        String keyState;
+        if (!prefs.ytKey().trim().isEmpty()) keyState = "введён на приставке";
+        else if (!BuildConfig.YT_API_KEY.isEmpty()) keyState = "из сборки";
+        else keyState = "нет";
+
+        String player = "автоматически";
+        if (!prefs.ytPlayer().isEmpty()) player = labelOf(prefs.ytPlayer());
+
+        String[] items = {
+                "Показывать на главном: " + (prefs.ytShow() ? "да" : "нет"),
+                "Мои каналы (" + prefs.ytChannels().size() + ")",
+                "Ключ API для трендов: " + keyState,
+                "Открывать видео в: " + player,
+                "Обновить сейчас",
+        };
+        dialog().setTitle("YouTube")
+                .setItems(items, (d, which) -> {
+                    switch (which) {
+                        case 0:
+                            prefs.setYtShow(!prefs.ytShow());
+                            pendingFocus = "settings";
+                            render();
+                            loadYouTube(true);
+                            break;
+                        case 1: manageChannels(); break;
+                        case 2: enterYtKey(); break;
+                        case 3: choosePlayer(); break;
+                        default:
+                            toast("Обновляю YouTube…");
+                            loadYouTube(true);
+                            break;
+                    }
+                })
+                .show();
+    }
+
+    private String labelOf(String pkg) {
+        try {
+            return String.valueOf(getPackageManager().getApplicationLabel(
+                    getPackageManager().getApplicationInfo(pkg, 0)));
+        } catch (Exception e) {
+            return pkg;
+        }
+    }
+
+    private void manageChannels() {
+        final List<YouTubeClient.Channel> channels = prefs.ytChannels();
+        final List<String> labels = new ArrayList<>();
+        labels.add("＋ Добавить канал…");
+        for (YouTubeClient.Channel ch : channels) labels.add(ch.name);
+
+        dialog().setTitle("Мои каналы")
+                .setItems(labels.toArray(new String[0]), (d, which) -> {
+                    if (which == 0) {
+                        addChannel();
+                        return;
+                    }
+                    final YouTubeClient.Channel ch = channels.get(which - 1);
+                    dialog().setTitle(ch.name)
+                            .setMessage("Убрать канал из ряда YouTube?")
+                            .setPositiveButton("Убрать", (d2, w2) -> {
+                                List<YouTubeClient.Channel> l = prefs.ytChannels();
+                                for (int i = 0; i < l.size(); i++) {
+                                    if (l.get(i).id.equals(ch.id)) {
+                                        l.remove(i);
+                                        break;
+                                    }
+                                }
+                                prefs.setYtChannels(l);
+                                ytVideos = new ArrayList<>();
+                                render();
+                                loadYouTube(true);
+                            })
+                            .setNegativeButton("Отмена", null)
+                            .show();
+                })
+                .show();
+    }
+
+    private void addChannel() {
+        final EditText input = new EditText(this);
+        input.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
+        input.setSingleLine(true);
+        input.setHint("@имя_канала или ссылка");
+
+        FrameLayout box = new FrameLayout(this);
+        box.setPadding(dp(24), dp(8), dp(24), 0);
+        box.addView(input);
+
+        dialog().setTitle("Добавить канал")
+                .setMessage("Например: @varlamov или youtube.com/@varlamov")
+                .setView(box)
+                .setPositiveButton("Добавить", (d, w) -> {
+                    final String text = input.getText().toString().trim();
+                    if (text.isEmpty()) return;
+                    toast("Ищу канал…");
+                    final String key = ytKey();
+                    ytWorker.execute(() -> {
+                        try {
+                            final YouTubeClient.Channel ch = YouTubeClient.resolve(text, key);
+                            ui.post(() -> {
+                                List<YouTubeClient.Channel> l = prefs.ytChannels();
+                                for (YouTubeClient.Channel c : l) {
+                                    if (c.id.equals(ch.id)) {
+                                        toast("Канал уже добавлен: " + ch.name);
+                                        return;
+                                    }
+                                }
+                                l.add(ch);
+                                prefs.setYtChannels(l);
+                                toast("Добавлен: " + ch.name);
+                                loadYouTube(true);
+                            });
+                        } catch (Exception e) {
+                            final String m = e.getMessage();
+                            ui.post(() -> toast("Не удалось добавить: " + m));
+                        }
+                    });
+                })
+                .setNegativeButton("Отмена", null)
+                .show();
+    }
+
+    private void enterYtKey() {
+        final EditText input = new EditText(this);
+        input.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
+        input.setSingleLine(true);
+        input.setText(prefs.ytKey());
+        input.setHint("AIza…");
+
+        FrameLayout box = new FrameLayout(this);
+        box.setPadding(dp(24), dp(8), dp(24), 0);
+        box.addView(input);
+
+        String msg = "Ключ YouTube Data API v3 нужен только для ряда «В тренде».";
+        if (!BuildConfig.YT_API_KEY.isEmpty()) msg += "\nЕсли оставить пустым — используется ключ из сборки.";
+
+        dialog().setTitle("Ключ API")
+                .setMessage(msg)
+                .setView(box)
+                .setPositiveButton("Сохранить", (d, w) -> {
+                    prefs.setYtKey(input.getText().toString().trim());
+                    trVideos = new ArrayList<>();
+                    trError = null;
+                    render();
+                    loadYouTube(true);
+                })
+                .setNeutralButton("Очистить", (d, w) -> {
+                    prefs.setYtKey("");
+                    trVideos = new ArrayList<>();
+                    trError = null;
+                    render();
+                    loadYouTube(true);
+                })
+                .setNegativeButton("Отмена", null)
+                .show();
+    }
+
+    private void choosePlayer() {
+        Intent probe = new Intent(Intent.ACTION_VIEW, Uri.parse("https://www.youtube.com/watch?v=dQw4w9WgXcQ"));
+        final List<String> pkgs = new ArrayList<>();
+        final List<String> labels = new ArrayList<>();
+        pkgs.add("");
+        labels.add("Автоматически");
+        try {
+            for (android.content.pm.ResolveInfo ri : getPackageManager().queryIntentActivities(probe, 0)) {
+                String pkg = ri.activityInfo.packageName;
+                if (pkgs.contains(pkg)) continue;
+                pkgs.add(pkg);
+                labels.add(String.valueOf(ri.loadLabel(getPackageManager())));
+            }
+        } catch (Exception ignored) {
+        }
+        int current = Math.max(0, pkgs.indexOf(prefs.ytPlayer()));
+        dialog().setTitle("Открывать видео в")
+                .setSingleChoiceItems(labels.toArray(new String[0]), current, (d, which) -> {
+                    prefs.setYtPlayer(pkgs.get(which));
+                    d.dismiss();
                 })
                 .show();
     }

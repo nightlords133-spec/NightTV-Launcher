@@ -2,6 +2,9 @@ plugins {
     id("com.android.application")
 }
 
+// Ключ YouTube Data API: секрет YT_API_KEY в настройках репозитория (необязательно)
+val ytApiKey = (System.getenv("YT_API_KEY") ?: "").trim()
+
 // Номер сборки GitHub Actions = номер версии (build-N в Releases)
 val buildNumber = System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull() ?: 1
 
@@ -15,6 +18,7 @@ android {
         targetSdk = 35
         versionCode = buildNumber
         versionName = "1.$buildNumber"
+        buildConfigField("String", "YT_API_KEY", "\"$ytApiKey\"")
     }
 
     // Постоянный ключ: без него каждая сборка подписана разным ключом
@@ -41,6 +45,10 @@ android {
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
+    }
+
+    buildFeatures {
+        buildConfig = true
     }
 
     lint {

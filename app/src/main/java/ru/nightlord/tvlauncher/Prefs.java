@@ -4,6 +4,9 @@ import android.content.Context;
 import android.content.SharedPreferences;
 import android.text.TextUtils;
 
+import org.json.JSONArray;
+import org.json.JSONObject;
+
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashSet;
@@ -135,6 +138,61 @@ final class Prefs {
 
     void setCity(String city) {
         sp.edit().putString("city", city).apply();
+    }
+
+    // ---- YouTube ----
+
+    boolean ytShow() {
+        return sp.getBoolean("yt_show", true);
+    }
+
+    void setYtShow(boolean on) {
+        sp.edit().putBoolean("yt_show", on).apply();
+    }
+
+    List<YouTubeClient.Channel> ytChannels() {
+        List<YouTubeClient.Channel> out = new ArrayList<>();
+        try {
+            JSONArray arr = new JSONArray(sp.getString("yt_channels", "[]"));
+            for (int i = 0; i < arr.length(); i++) {
+                JSONObject o = arr.getJSONObject(i);
+                YouTubeClient.Channel ch = new YouTubeClient.Channel();
+                ch.id = o.getString("id");
+                ch.name = o.optString("name", ch.id);
+                out.add(ch);
+            }
+        } catch (Exception ignored) {
+        }
+        return out;
+    }
+
+    void setYtChannels(List<YouTubeClient.Channel> list) {
+        JSONArray arr = new JSONArray();
+        try {
+            for (YouTubeClient.Channel ch : list) {
+                arr.put(new JSONObject().put("id", ch.id).put("name", ch.name));
+            }
+        } catch (Exception ignored) {
+        }
+        sp.edit().putString("yt_channels", arr.toString()).apply();
+    }
+
+    /** Ключ, введённый на приставке (пусто — используется ключ из сборки). */
+    String ytKey() {
+        return sp.getString("yt_key", "");
+    }
+
+    void setYtKey(String key) {
+        sp.edit().putString("yt_key", key).apply();
+    }
+
+    /** Пакет плеера для видео ("" — автоматически). */
+    String ytPlayer() {
+        return sp.getString("yt_player", "");
+    }
+
+    void setYtPlayer(String pkg) {
+        sp.edit().putString("yt_player", pkg).apply();
     }
 
     // ---- Обновления ----

@@ -44,6 +44,24 @@
 3. Build → Build APK(s), или в терминале: `gradlew.bat assembleDebug`
 4. Файл: `app\build\outputs\apk\debug\app-debug.apk`
 
+## YouTube на главном экране
+
+- **«Новое на ваших каналах»** — свежие видео с выбранных каналов, ключ не нужен.
+  Добавить канал: ⚙ Настройки → YouTube… → Мои каналы → `@имя_канала` или ссылка.
+- **«В тренде»** — популярное в России. Нужен бесплатный ключ YouTube Data API v3:
+  1. console.cloud.google.com → создать проект.
+  2. «APIs & Services» → «Library» → включить **YouTube Data API v3**.
+  3. «Credentials» → «Create credentials» → «API key». В настройках ключа
+     ограничить его только YouTube Data API v3.
+  4. В репозитории GitHub: Settings → Secrets and variables → Actions →
+     New repository secret, имя `YT_API_KEY`, значение — ключ.
+  5. Actions → Build APK → Run workflow. Новая сборка придёт на приставку автообновлением.
+
+  Ключ можно и ввести вручную на приставке (Настройки → YouTube… → Ключ API).
+- Видео открывается в YouTube для ТВ, SmartTube или обычном YouTube — что найдётся.
+  Выбрать вручную: Настройки → YouTube… → Открывать видео в.
+- Личные рекомендации главной страницы YouTube сторонним лаунчерам недоступны.
+
 ## Обновления и подпись
 
 С build-3 все сборки подписаны постоянным ключом `signing/nighttv.jks`,
