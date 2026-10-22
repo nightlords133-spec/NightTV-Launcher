@@ -3,7 +3,7 @@ plugins {
 }
 
 // Ключ YouTube Data API: секрет YT_API_KEY в настройках репозитория (необязательно)
-val ytApiKey = (System.getenv("YT_API_KEY") ?: "").trim()
+val ytApiKey = (System.getenv("YT_API_KEY") ?: "").replace(Regex("[\\s\"']"), "")
 
 // Номер сборки GitHub Actions = номер версии (build-N в Releases)
 val buildNumber = System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull() ?: 1

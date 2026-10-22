@@ -34,6 +34,19 @@ jobs:
           yes | "$SDKM" --licenses > /dev/null || true
           "$SDKM" "platforms;android-35" "build-tools;35.0.0" "platform-tools" > /dev/null
 
+      - name: Check YouTube key format
+        env:
+          YT_API_KEY: ${{ secrets.YT_API_KEY }}
+        run: |
+          K=$(printf '%s' "$YT_API_KEY" | tr -d " \t\r\n\"'")
+          if [ -z "$K" ]; then
+            echo "::warning::YT_API_KEY не задан — ряд «В тренде» будет скрыт"
+          elif [[ "$K" =~ ^AIza[0-9A-Za-z_-]{35}$ ]]; then
+            echo "Ключ YouTube: формат верный (AIza…, 39 символов)"
+          else
+            echo "::warning::YT_API_KEY не похож на API key: длина ${#K}, начало '${K:0:4}'. Нужен ключ вида AIza… (39 символов)"
+          fi
+
       - name: Build APK
         env:
           YT_API_KEY: ${{ secrets.YT_API_KEY }}
