@@ -6,28 +6,36 @@ import android.text.TextUtils;
 
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 /** Настройки лаунчера. */
 final class Prefs {
+    private static final int MAX_RECENTS = 10;
+
     private final SharedPreferences sp;
 
     Prefs(Context c) {
         sp = c.getSharedPreferences("launcher", Context.MODE_PRIVATE);
     }
 
-    // ---- Избранное (порядок важен) ----
-
-    List<String> favorites() {
+    private List<String> readList(String key) {
         List<String> out = new ArrayList<>();
-        for (String p : sp.getString("favs", "").split(",")) {
+        for (String p : sp.getString(key, "").split(",")) {
             if (!p.isEmpty()) out.add(p);
         }
         return out;
     }
 
-    private void saveFavorites(List<String> list) {
-        sp.edit().putString("favs", TextUtils.join(",", list)).apply();
+    private void writeList(String key, List<String> list) {
+        sp.edit().putString(key, TextUtils.join(",", list)).apply();
+    }
+
+    // ---- Избранное (порядок важен) ----
+
+    List<String> favorites() {
+        return readList("favs");
     }
 
     boolean isFavorite(String pkg) {
@@ -38,14 +46,14 @@ final class Prefs {
         List<String> l = favorites();
         if (!l.contains(pkg)) {
             l.add(pkg);
-            saveFavorites(l);
+            writeList("favs", l);
         }
     }
 
     void removeFavorite(String pkg) {
         List<String> l = favorites();
         l.remove(pkg);
-        saveFavorites(l);
+        writeList("favs", l);
     }
 
     /** Сдвигает в избранном на delta позиций, пропуская удалённые приложения. */
@@ -56,7 +64,41 @@ final class Prefs {
         int j = i + delta;
         if (i < 0 || j < 0 || j >= l.size()) return;
         Collections.swap(l, i, j);
-        saveFavorites(l);
+        writeList("favs", l);
+    }
+
+    // ---- Недавние (самое свежее первым) ----
+
+    List<String> recents() {
+        return readList("recents");
+    }
+
+    void pushRecent(String pkg) {
+        List<String> l = recents();
+        l.remove(pkg);
+        l.add(0, pkg);
+        while (l.size() > MAX_RECENTS) l.remove(l.size() - 1);
+        writeList("recents", l);
+    }
+
+    void clearRecents() {
+        writeList("recents", new ArrayList<>());
+    }
+
+    // ---- Скрытые ----
+
+    Set<String> hidden() {
+        return new HashSet<>(readList("hidden"));
+    }
+
+    void setHidden(Set<String> pkgs) {
+        writeList("hidden", new ArrayList<>(pkgs));
+    }
+
+    void hide(String pkg) {
+        Set<String> s = hidden();
+        s.add(pkg);
+        setHidden(s);
     }
 
     // ---- Внешний вид ----
@@ -93,5 +135,23 @@ final class Prefs {
 
     void setCity(String city) {
         sp.edit().putString("city", city).apply();
+    }
+
+    // ---- Обновления ----
+
+    long lastUpdateCheck() {
+        return sp.getLong("upd_last", 0);
+    }
+
+    void setLastUpdateCheck(long t) {
+        sp.edit().putLong("upd_last", t).apply();
+    }
+
+    int skippedBuild() {
+        return sp.getInt("upd_skip", 0);
+    }
+
+    void setSkippedBuild(int b) {
+        sp.edit().putInt("upd_skip", b).apply();
     }
 }

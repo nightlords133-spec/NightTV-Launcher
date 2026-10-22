@@ -36,8 +36,10 @@ import android.widget.Toast;
 
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -48,7 +50,10 @@ import java.util.concurrent.Executors;
 public class MainActivity extends Activity {
 
     private static final long WEATHER_PERIOD_MS = 30 * 60 * 1000L;
+    private static final long STATUS_PERIOD_MS = 15 * 1000L;
+    private static final long UPDATE_PERIOD_MS = 6 * 60 * 60 * 1000L;
     private static final String TAG_FAV = "fav:";
+    private static final String TAG_REC = "rec:";
     private static final String TAG_ALL = "all:";
 
     private final Handler ui = new Handler(Looper.getMainLooper());
@@ -63,6 +68,10 @@ public class MainActivity extends Activity {
     private LinearLayout favRow;
     private LinearLayout grid;
     private TextView favHint;
+    private TextView recentTitle;
+    private View recentScroll;
+    private LinearLayout recentRow;
+    private TextView statusView;
     private TextView weatherView;
     private TextView settingsButton;
     private GradientDrawable settingsBg;
@@ -76,6 +85,14 @@ public class MainActivity extends Activity {
         public void run() {
             updateWeather();
             ui.postDelayed(this, WEATHER_PERIOD_MS);
+        }
+    };
+
+    private final Runnable statusTask = new Runnable() {
+        @Override
+        public void run() {
+            updateStatus();
+            ui.postDelayed(this, STATUS_PERIOD_MS);
         }
     };
 
@@ -96,12 +113,18 @@ public class MainActivity extends Activity {
         reloadApps();
         ui.removeCallbacks(weatherTask);
         ui.post(weatherTask);
+        ui.removeCallbacks(statusTask);
+        ui.post(statusTask);
+        if (System.currentTimeMillis() - prefs.lastUpdateCheck() > UPDATE_PERIOD_MS) {
+            checkUpdates(false);
+        }
     }
 
     @Override
     protected void onPause() {
         super.onPause();
         ui.removeCallbacks(weatherTask);
+        ui.removeCallbacks(statusTask);
     }
 
     @Override
@@ -168,23 +191,20 @@ public class MainActivity extends Activity {
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
         column.addView(sectionTitle("Избранное"));
-        HorizontalScrollView favScroll = new HorizontalScrollView(this);
-        favScroll.setHorizontalScrollBarEnabled(false);
-        favScroll.setClipChildren(false);
-        favScroll.setClipToPadding(false);
-        favRow = new LinearLayout(this);
-        favRow.setOrientation(LinearLayout.HORIZONTAL);
-        favRow.setClipChildren(false);
-        favRow.setClipToPadding(false);
-        favRow.setPadding(0, dp(14), 0, dp(14));
-        favScroll.addView(favRow);
-        column.addView(favScroll);
+        favRow = newRow();
+        column.addView(wrapRow(favRow));
 
         favHint = text(15, 0.6f);
         favHint.setText("Удерживайте ОК на приложении (или нажмите «Меню» на пульте), "
                 + "чтобы добавить его в избранное");
         favHint.setPadding(0, dp(4), 0, dp(12));
         column.addView(favHint);
+
+        recentTitle = sectionTitle("Недавние");
+        column.addView(recentTitle);
+        recentRow = newRow();
+        recentScroll = wrapRow(recentRow);
+        column.addView(recentScroll);
 
         column.addView(sectionTitle("Все приложения"));
         grid = new LinearLayout(this);
@@ -204,6 +224,24 @@ public class MainActivity extends Activity {
         scroll.addView(column);
         root.addView(scroll);
         setContentView(root);
+    }
+
+    private LinearLayout newRow() {
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setClipChildren(false);
+        row.setClipToPadding(false);
+        row.setPadding(0, dp(14), 0, dp(14));
+        return row;
+    }
+
+    private View wrapRow(LinearLayout row) {
+        HorizontalScrollView hs = new HorizontalScrollView(this);
+        hs.setHorizontalScrollBarEnabled(false);
+        hs.setClipChildren(false);
+        hs.setClipToPadding(false);
+        hs.addView(row);
+        return hs;
     }
 
     private View buildHeader() {
@@ -232,6 +270,10 @@ public class MainActivity extends Activity {
         date.setTextColor(0xCCFFFFFF);
         date.setShadowLayer(dp(3), 0, dp(1), 0x80000000);
         timeBox.addView(date);
+
+        statusView = text(14, 0.6f);
+        statusView.setPadding(0, dp(6), 0, 0);
+        timeBox.addView(statusView);
 
         header.addView(timeBox);
 
@@ -371,11 +413,18 @@ public class MainActivity extends Activity {
         }
 
         favRow.removeAllViews();
+        recentRow.removeAllViews();
         grid.removeAllViews();
 
         int width = tileWidth();
+        Set<String> hidden = prefs.hidden();
+        List<AppInfo> visible = new ArrayList<>();
         Map<String, AppInfo> byPkg = new HashMap<>();
-        for (AppInfo a : apps) byPkg.put(a.pkg, a);
+        for (AppInfo a : apps) {
+            if (hidden.contains(a.pkg)) continue;
+            visible.add(a);
+            byPkg.put(a.pkg, a);
+        }
 
         int favCount = 0;
         for (String pkg : prefs.favorites()) {
@@ -386,9 +435,20 @@ public class MainActivity extends Activity {
         }
         favHint.setVisibility(favCount == 0 ? View.VISIBLE : View.GONE);
 
+        int recCount = 0;
+        for (String pkg : prefs.recents()) {
+            AppInfo a = byPkg.get(pkg);
+            if (a == null) continue;
+            recentRow.addView(makeTile(a, width, TAG_REC + pkg), tileParams());
+            recCount++;
+        }
+        int recVis = recCount == 0 ? View.GONE : View.VISIBLE;
+        recentTitle.setVisibility(recVis);
+        recentScroll.setVisibility(recVis);
+
         int cols = prefs.columns();
         LinearLayout row = null;
-        for (int i = 0; i < apps.size(); i++) {
+        for (int i = 0; i < visible.size(); i++) {
             if (i % cols == 0) {
                 row = new LinearLayout(this);
                 row.setOrientation(LinearLayout.HORIZONTAL);
@@ -396,7 +456,7 @@ public class MainActivity extends Activity {
                 row.setClipToPadding(false);
                 grid.addView(row);
             }
-            AppInfo a = apps.get(i);
+            AppInfo a = visible.get(i);
             row.addView(makeTile(a, width, TAG_ALL + a.pkg), tileParams());
         }
 
@@ -451,6 +511,7 @@ public class MainActivity extends Activity {
     // ------------------------------------------------------------ действия
 
     private void launch(AppInfo app) {
+        prefs.pushRecent(app.pkg);
         Intent i = new Intent(Intent.ACTION_MAIN);
         i.addCategory(app.leanback ? Intent.CATEGORY_LEANBACK_LAUNCHER : Intent.CATEGORY_LAUNCHER);
         i.setComponent(new ComponentName(app.pkg, app.activity));
@@ -520,6 +581,13 @@ public class MainActivity extends Activity {
             });
         }
 
+        labels.add("Скрыть с главного экрана");
+        actions.add(() -> {
+            prefs.hide(app.pkg);
+            render();
+            toast("Скрыто. Вернуть: Настройки → Скрытые приложения");
+        });
+
         labels.add("О приложении");
         actions.add(() -> safeStart(new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
                 Uri.parse("package:" + app.pkg)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)));
@@ -541,6 +609,9 @@ public class MainActivity extends Activity {
                 "Тема: " + Themes.NAMES[Themes.safe(prefs.theme())],
                 "Колонок в сетке: " + prefs.columns(),
                 "Погода: " + weather,
+                "Скрытые приложения (" + prefs.hidden().size() + ")",
+                "Очистить «Недавние»",
+                "Проверить обновления",
                 "Системные настройки Android",
                 "О программе",
         };
@@ -550,12 +621,121 @@ public class MainActivity extends Activity {
                         case 0: chooseTheme(); break;
                         case 1: chooseColumns(); break;
                         case 2: chooseCity(); break;
-                        case 3: safeStart(new Intent(Settings.ACTION_SETTINGS)
+                        case 3: chooseHidden(); break;
+                        case 4:
+                            prefs.clearRecents();
+                            pendingFocus = "settings";
+                            render();
+                            toast("Список недавних очищен");
+                            break;
+                        case 5: checkUpdates(true); break;
+                        case 6: safeStart(new Intent(Settings.ACTION_SETTINGS)
                                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)); break;
                         default: showAbout(); break;
                     }
                 })
                 .show();
+    }
+
+    private void chooseHidden() {
+        if (apps.isEmpty()) return;
+        final Set<String> hidden = prefs.hidden();
+        final String[] labels = new String[apps.size()];
+        final boolean[] checked = new boolean[apps.size()];
+        for (int i = 0; i < apps.size(); i++) {
+            labels[i] = apps.get(i).label;
+            checked[i] = hidden.contains(apps.get(i).pkg);
+        }
+        dialog().setTitle("Отметьте, что скрыть")
+                .setMultiChoiceItems(labels, checked, (d, which, isChecked) -> checked[which] = isChecked)
+                .setPositiveButton("Сохранить", (d, w) -> {
+                    Set<String> result = new HashSet<>();
+                    for (int i = 0; i < apps.size(); i++) {
+                        if (checked[i]) result.add(apps.get(i).pkg);
+                    }
+                    prefs.setHidden(result);
+                    pendingFocus = "settings";
+                    render();
+                })
+                .setNegativeButton("Отмена", null)
+                .show();
+    }
+
+    // ------------------------------------------------------------ строка состояния
+
+    private void updateStatus() {
+        if (statusView == null) return;
+        worker.execute(() -> {
+            final String s = NetStatus.read(this);
+            ui.post(() -> statusView.setText(s));
+        });
+    }
+
+    // ------------------------------------------------------------ обновления
+
+    private void checkUpdates(final boolean manual) {
+        prefs.setLastUpdateCheck(System.currentTimeMillis());
+        if (manual) toast("Проверяю обновления…");
+        worker.execute(() -> {
+            Updater.Release rel = null;
+            String err = null;
+            try {
+                rel = Updater.fetchLatest();
+            } catch (Exception e) {
+                err = e.getMessage();
+            }
+            final Updater.Release r = rel;
+            final String error = err;
+            ui.post(() -> onUpdateChecked(r, error, manual));
+        });
+    }
+
+    private void onUpdateChecked(Updater.Release r, String error, boolean manual) {
+        if (isFinishing()) return;
+        int current = Updater.currentBuild(this);
+        if (r == null) {
+            if (manual) toast("Не удалось проверить обновления" + (error != null ? ": " + error : ""));
+            return;
+        }
+        if (r.build <= current) {
+            if (manual) toast("У вас последняя версия (сборка " + current + ")");
+            return;
+        }
+        if (!manual && r.build == prefs.skippedBuild()) return;
+
+        String msg = "Новая сборка: " + r.build + "\nУстановлена: " + current;
+        if (r.notes != null && !r.notes.trim().isEmpty()) msg += "\n\n" + r.notes.trim();
+        dialog().setTitle("Доступно обновление NightTV")
+                .setMessage(msg)
+                .setPositiveButton("Установить", (d, w) -> installUpdate(r, false))
+                .setNeutralButton("Пропустить", (d, w) -> prefs.setSkippedBuild(r.build))
+                .setNegativeButton("Позже", null)
+                .show();
+    }
+
+    private void installUpdate(final Updater.Release r, boolean force) {
+        if (!force && Build.VERSION.SDK_INT >= 26 && !getPackageManager().canRequestPackageInstalls()) {
+            dialog().setTitle("Нужно разрешение")
+                    .setMessage("Разрешите NightTV устанавливать приложения "
+                            + "(«Неизвестные источники»), потом снова нажмите «Установить».")
+                    .setPositiveButton("Открыть настройки", (d, w) -> safeStart(
+                            new Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                                    Uri.parse("package:" + getPackageName()))
+                                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)))
+                    .setNeutralButton("Всё равно установить", (d, w) -> installUpdate(r, true))
+                    .setNegativeButton("Отмена", null)
+                    .show();
+            return;
+        }
+        toast("Загружаю обновление…");
+        worker.execute(() -> {
+            try {
+                Updater.install(this, r);
+            } catch (Exception e) {
+                final String m = e.getMessage();
+                ui.post(() -> toast("Ошибка обновления: " + m));
+            }
+        });
     }
 
     private void chooseTheme() {
@@ -622,7 +802,7 @@ public class MainActivity extends Activity {
                         + "Версия " + version + "\n"
                         + "Автор: NightLord РВЕ\n\n"
                         + "ОК — открыть приложение\n"
-                        + "Удерживать ОК или «Меню» — избранное, порядок, удаление\n"
+                        + "Удерживать ОК или «Меню» — избранное, порядок, скрыть, удалить\n"
                         + "«Домой» или «Назад» — вернуться к началу экрана")
                 .setPositiveButton("OK", null)
                 .show();
