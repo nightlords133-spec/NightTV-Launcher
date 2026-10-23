@@ -44,6 +44,11 @@ final class NetStatus {
             sb.append("   ·   свободно ").append(Formatter.formatShortFileSize(c, st.getAvailableBytes()));
         } catch (Exception ignored) {
         }
+        try {
+            android.app.ActivityManager.MemoryInfo mi = MemoryCleaner.info(c);
+            sb.append("   ·   ОЗУ ").append(Formatter.formatShortFileSize(c, mi.availMem));
+        } catch (Exception ignored) {
+        }
         return sb.toString();
     }
 }

@@ -4,6 +4,9 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.REQUEST_DELETE_PACKAGES" />
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.KILL_BACKGROUND_PROCESSES" />
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
 
     <!-- Приставки без тачскрина и без обязательного Leanback -->
     <uses-feature android:name="android.software.leanback" android:required="false" />
@@ -24,6 +27,7 @@
             <action android:name="android.intent.action.VIEW" />
             <data android:scheme="https" android:host="www.youtube.com" />
         </intent>
+        <package android:name="io.github.romanvht.byedpi" />
         <package android:name="com.google.android.youtube.tv" />
         <package android:name="com.google.android.youtube" />
         <package android:name="com.liskovsoft.smarttubetv.beta" />
@@ -68,5 +72,23 @@
         <receiver
             android:name=".InstallReceiver"
             android:exported="false" />
+        <!-- Таймер сна -->
+        <receiver
+            android:name=".SleepReceiver"
+            android:exported="false" />
+
+        <!-- Право блокировки экрана для таймера сна -->
+        <receiver
+            android:name=".AdminReceiver"
+            android:exported="true"
+            android:label="NightTV — таймер сна"
+            android:permission="android.permission.BIND_DEVICE_ADMIN">
+            <meta-data
+                android:name="android.app.device_admin"
+                android:resource="@xml/device_admin" />
+            <intent-filter>
+                <action android:name="android.app.action.DEVICE_ADMIN_ENABLED" />
+            </intent-filter>
+        </receiver>
     </application>
 </manifest>

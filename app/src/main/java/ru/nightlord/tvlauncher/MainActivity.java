@@ -110,7 +110,24 @@ public class MainActivity extends Activity {
     private TextView statusView;
     private TextView weatherView;
     private TextView settingsButton;
-    private GradientDrawable settingsBg;
+    private TextView sleepButton;
+
+    // Заставка, ночной режим
+    private FrameLayout saverView;
+    private LinearLayout saverContent;
+    private TextView saverWeather;
+    private boolean saverShowing;
+    private boolean saverSwallowUp;
+    private long lastInput = System.currentTimeMillis();
+    private View launcherDim;
+    private static final long SAVER_MOVE_MS = 20 * 1000L;
+    private static final int[] SAVER_OPTIONS = {0, 2, 5, 10, 15, 30};
+
+    // Автоспасение YouTube
+    private Boolean ytReachable;
+    private long lastRescueAt;
+    private boolean rescueHintShown;
+    private static final long RESCUE_PAUSE_MS = 5 * 60 * 1000L;
 
     /** Тег плитки, на которую вернуть фокус после перерисовки. */
     private String pendingFocus;
@@ -121,6 +138,44 @@ public class MainActivity extends Activity {
         public void run() {
             updateWeather();
             ui.postDelayed(this, WEATHER_PERIOD_MS);
+        }
+    };
+
+    private final Runnable saverTask = new Runnable() {
+        @Override
+        public void run() {
+            int min = prefs.saverMinutes();
+            // hasWindowFocus() == false — открыто меню или окно, заставку не показываем
+            if (!saverShowing && min > 0 && hasWindowFocus()
+                    && System.currentTimeMillis() - lastInput > min * 60_000L) {
+                showSaver(false);
+            }
+            updateSleepButton();
+            ui.postDelayed(this, 15_000L);
+        }
+    };
+
+    private final Runnable saverMove = new Runnable() {
+        @Override
+        public void run() {
+            if (!saverShowing || saverContent == null) return;
+            saverContent.animate().alpha(0f).setDuration(600).withEndAction(() -> {
+                int w = saverView.getWidth() - saverContent.getWidth();
+                int h = saverView.getHeight() - saverContent.getHeight();
+                saverContent.setTranslationX((float) (Math.random() * Math.max(0, w)));
+                saverContent.setTranslationY((float) (Math.random() * Math.max(0, h)));
+                saverContent.animate().alpha(1f).setDuration(600).start();
+            }).start();
+            ui.postDelayed(this, SAVER_MOVE_MS);
+        }
+    };
+
+    /** Работает всегда (и когда открыто другое приложение): включает/выключает ночное затемнение. */
+    private final Runnable nightTask = new Runnable() {
+        @Override
+        public void run() {
+            applyNight();
+            ui.postDelayed(this, 60_000L);
         }
     };
 
@@ -141,6 +196,10 @@ public class MainActivity extends Activity {
         repo = new AppRepository(this);
         buildUi();
         registerPackageReceiver();
+        ui.post(nightTask);
+        if (getIntent() != null && getIntent().getBooleanExtra(SleepTimer.EXTRA_BLACK, false)) {
+            showSaver(true);
+        }
     }
 
     @Override
@@ -155,6 +214,10 @@ public class MainActivity extends Activity {
             checkUpdates(false);
         }
         loadYouTube(false);
+        lastInput = System.currentTimeMillis();
+        ui.removeCallbacks(saverTask);
+        ui.post(saverTask);
+        applyNight();
     }
 
     @Override
@@ -162,6 +225,8 @@ public class MainActivity extends Activity {
         super.onPause();
         ui.removeCallbacks(weatherTask);
         ui.removeCallbacks(statusTask);
+        ui.removeCallbacks(saverTask);
+        if (saverShowing) hideSaver();
     }
 
     @Override
@@ -173,6 +238,7 @@ public class MainActivity extends Activity {
             } catch (Exception ignored) {
             }
         }
+        ui.removeCallbacksAndMessages(null);
         worker.shutdownNow();
         netWorker.shutdownNow();
         ytWorker.shutdownNow();
@@ -183,8 +249,38 @@ public class MainActivity extends Activity {
     @Override
     protected void onNewIntent(Intent intent) {
         super.onNewIntent(intent);
+        if (intent != null && intent.getBooleanExtra(SleepTimer.EXTRA_BLACK, false)) {
+            showSaver(true);
+            return;
+        }
+        if (saverShowing) hideSaver();
+        lastInput = System.currentTimeMillis();
         if (scroll != null) scroll.smoothScrollTo(0, 0);
         focusFirstTile();
+    }
+
+    /** Любая кнопка пульта будит заставку; кнопка поиска — голосовой поиск. */
+    @Override
+    public boolean dispatchKeyEvent(KeyEvent event) {
+        lastInput = System.currentTimeMillis();
+        if (saverShowing) {
+            if (event.getAction() == KeyEvent.ACTION_DOWN) {
+                hideSaver();
+                saverSwallowUp = true;
+            }
+            return true;
+        }
+        if (saverSwallowUp && event.getAction() == KeyEvent.ACTION_UP) {
+            saverSwallowUp = false;
+            return true;
+        }
+        int k = event.getKeyCode();
+        if ((k == KeyEvent.KEYCODE_SEARCH || k == KeyEvent.KEYCODE_VOICE_ASSIST)
+                && event.getAction() == KeyEvent.ACTION_UP) {
+            voiceSearch();
+            return true;
+        }
+        return super.dispatchKeyEvent(event);
     }
 
     /** «Назад» на домашнем экране ничего не делает. */
@@ -282,6 +378,16 @@ public class MainActivity extends Activity {
 
         scroll.addView(column);
         root.addView(scroll);
+
+        launcherDim = new View(this);
+        launcherDim.setFocusable(false);
+        launcherDim.setClickable(false);
+        launcherDim.setVisibility(View.GONE);
+        root.addView(launcherDim, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+
+        root.addView(buildSaver(), new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
         setContentView(root);
     }
 
@@ -360,26 +466,39 @@ public class MainActivity extends Activity {
         weatherView.setPadding(0, 0, dp(28), 0);
         header.addView(weatherView);
 
-        settingsButton = text(18, 0.85f);
-        settingsButton.setText("⚙  Настройки");
-        settingsButton.setPadding(dp(20), dp(10), dp(20), dp(10));
-        settingsBg = new GradientDrawable();
-        settingsBg.setCornerRadius(dp(24));
-        settingsBg.setColor(0x22FFFFFF);
-        settingsButton.setBackground(settingsBg);
-        settingsButton.setFocusable(true);
-        settingsButton.setClickable(true);
-        settingsButton.setTag("settings");
-        settingsButton.setOnClickListener(v -> showSettings());
-        settingsButton.setOnFocusChangeListener((v, focused) -> {
-            settingsBg.setColor(focused ? 0x55FFFFFF : 0x22FFFFFF);
-            settingsBg.setStroke(dp(2), focused ? Themes.accent(prefs.theme()) : 0x00000000);
-            v.setAlpha(focused ? 1f : 0.85f);
-            v.animate().scaleX(focused ? 1.08f : 1f).scaleY(focused ? 1.08f : 1f)
-                    .setDuration(150).start();
-        });
+        header.addView(headerButton("🎤", "voice", v -> voiceSearch()));
+        header.addView(headerButton("🧹", "clean", v -> cleanMemory()));
+        sleepButton = headerButton("⏾", "sleep", v -> showSleepTimer());
+        header.addView(sleepButton);
+        settingsButton = headerButton("⚙  Настройки", "settings", v -> showSettings());
         header.addView(settingsButton);
         return header;
+    }
+
+    private TextView headerButton(String label, String tag, View.OnClickListener click) {
+        final TextView b = text(18, 0.85f);
+        b.setText(label);
+        b.setPadding(dp(18), dp(10), dp(18), dp(10));
+        final GradientDrawable bg = new GradientDrawable();
+        bg.setCornerRadius(dp(24));
+        bg.setColor(0x22FFFFFF);
+        b.setBackground(bg);
+        b.setFocusable(true);
+        b.setClickable(true);
+        b.setTag(tag);
+        b.setOnClickListener(click);
+        b.setOnFocusChangeListener((v, focused) -> {
+            bg.setColor(focused ? 0x55FFFFFF : 0x22FFFFFF);
+            bg.setStroke(dp(2), focused ? Themes.accent(prefs.theme()) : 0x00000000);
+            v.setAlpha(focused ? 1f : 0.85f);
+            v.animate().scaleX(focused ? 1.1f : 1f).scaleY(focused ? 1.1f : 1f)
+                    .setDuration(150).start();
+        });
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        lp.setMargins(dp(8), 0, 0, 0);
+        b.setLayoutParams(lp);
+        return b;
     }
 
     private TextView sectionTitle(String title) {
@@ -910,6 +1029,10 @@ public class MainActivity extends Activity {
     // ------------------------------------------------------------ действия
 
     private void launch(AppInfo app) {
+        ensureDpiThen(app.pkg, () -> launchNow(app));
+    }
+
+    private void launchNow(AppInfo app) {
         prefs.pushRecent(app.pkg);
         if (folderDialog != null && folderDialog.isShowing()) folderDialog.dismiss();
         Intent i = new Intent(Intent.ACTION_MAIN);
@@ -1014,6 +1137,9 @@ public class MainActivity extends Activity {
                 "Вид приложений: " + GROUP_MODES[Math.max(0, Math.min(2, prefs.groupMode()))],
                 "Погода: " + weather,
                 "YouTube…",
+                "Автоспасение YouTube (ByeByeDPI): " + (prefs.dpiAuto() ? "вкл" : "выкл"),
+                "Заставка: " + (prefs.saverMinutes() == 0 ? "выключена" : "через " + prefs.saverMinutes() + " мин"),
+                "Ночной режим: " + NightMode.MODES[Math.max(0, Math.min(2, prefs.nightMode()))] + "…",
                 "Скрытые приложения (" + prefs.hidden().size() + ")",
                 "Очистить «Недавние»",
                 "Проверить обновления",
@@ -1029,16 +1155,19 @@ public class MainActivity extends Activity {
                         case 2: chooseGroupMode(); break;
                         case 3: chooseCity(); break;
                         case 4: showYouTubeSettings(); break;
-                        case 5: chooseHidden(); break;
-                        case 6:
+                        case 5: chooseDpiAuto(); break;
+                        case 6: chooseSaver(); break;
+                        case 7: showNightSettings(); break;
+                        case 8: chooseHidden(); break;
+                        case 9:
                             prefs.clearRecents();
                             pendingFocus = "settings";
                             render();
                             toast("Список недавних очищен");
                             break;
-                        case 7: checkUpdates(true); break;
-                        case 8: runNetworkTest(); break;
-                        case 9: safeStart(new Intent(Settings.ACTION_SETTINGS)
+                        case 10: checkUpdates(true); break;
+                        case 11: runNetworkTest(); break;
+                        case 12: safeStart(new Intent(Settings.ACTION_SETTINGS)
                                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)); break;
                         default: showAbout(); break;
                     }
@@ -1149,6 +1278,10 @@ public class MainActivity extends Activity {
     }
 
     private void openVideo(Video v, boolean choose) {
+        ensureDpiThen("youtube", () -> openVideoNow(v, choose));
+    }
+
+    private void openVideoNow(Video v, boolean choose) {
         Intent i = videoIntent(v);
         if (choose) {
             safeStart(Intent.createChooser(i, "Открыть видео в…").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
@@ -1387,6 +1520,343 @@ public class MainActivity extends Activity {
                 .show();
     }
 
+    // ------------------------------------------------------------ автоспасение YouTube
+
+    private boolean isYouTubeTarget(String pkg) {
+        if (pkg.contains("youtube") || pkg.contains("smarttube")) return true;
+        for (String p : YT_PLAYERS) if (p.equals(pkg)) return true;
+        return false;
+    }
+
+    /** Перед YouTube включаем ByeByeDPI, если она установлена и выключена. */
+    private void ensureDpiThen(String pkg, Runnable action) {
+        if (prefs.dpiAuto() && isYouTubeTarget(pkg)
+                && DpiRescue.installed(this) && !DpiRescue.vpnActive(this)
+                && DpiRescue.start(this)) {
+            toast("Включаю ByeByeDPI…");
+            ui.postDelayed(action, 1500);
+        } else {
+            action.run();
+        }
+    }
+
+    /** Интернет есть, а YouTube нет — включаем или перезапускаем ByeByeDPI. */
+    private void rescueYouTube(boolean manual) {
+        if (!DpiRescue.installed(this)) {
+            if (manual) toast("ByeByeDPI не установлена");
+            return;
+        }
+        if (!manual && (!prefs.dpiAuto()
+                || System.currentTimeMillis() - lastRescueAt < RESCUE_PAUSE_MS)) return;
+        lastRescueAt = System.currentTimeMillis();
+
+        if (!DpiRescue.vpnActive(this)) {
+            toast("YouTube недоступен — включаю ByeByeDPI");
+            DpiRescue.start(this);
+        } else {
+            toast("YouTube недоступен — перезапускаю ByeByeDPI");
+            DpiRescue.stop(this);
+            ui.postDelayed(() -> DpiRescue.start(this), 2500);
+        }
+        // Через 10 секунд проверяем ещё раз
+        ui.postDelayed(() -> {
+            if (!DpiRescue.vpnActive(this) && !rescueHintShown) {
+                rescueHintShown = true;
+                dialog().setTitle("ByeByeDPI не включилась")
+                        .setMessage("Откройте ByeByeDPI и один раз нажмите «Подключить», "
+                                + "разрешив ей режим VPN. Дальше NightTV будет включать её сам.")
+                        .setPositiveButton("Открыть ByeByeDPI", (d, w) -> {
+                            Intent i = getPackageManager().getLaunchIntentForPackage(DpiRescue.PKG);
+                            if (i != null) safeStart(i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+                        })
+                        .setNegativeButton("Позже", null)
+                        .show();
+            }
+            netCheckedAt = 0;
+            checkInternetQuick();
+        }, 10_000L);
+    }
+
+    private void chooseDpiAuto() {
+        String[] items = {
+                prefs.dpiAuto() ? "Выключить автоспасение" : "Включить автоспасение",
+                "Спасти YouTube сейчас",
+                "Как это работает",
+        };
+        dialog().setTitle("Автоспасение YouTube")
+                .setItems(items, (d, which) -> {
+                    if (which == 0) {
+                        prefs.setDpiAuto(!prefs.dpiAuto());
+                        toast(prefs.dpiAuto() ? "Автоспасение включено" : "Автоспасение выключено");
+                    } else if (which == 1) {
+                        rescueYouTube(true);
+                    } else {
+                        dialog().setTitle("Автоспасение YouTube")
+                                .setMessage("Раз в минуту, пока открыт главный экран, NightTV проверяет "
+                                        + "интернет и YouTube. Если интернет есть, а YouTube нет — "
+                                        + "включает ByeByeDPI или перезапускает её (не чаще раза в 5 минут).\n\n"
+                                        + "Перед запуском YouTube, SmartTube и видео из рядов NightTV тоже "
+                                        + "включает ByeByeDPI, если она выключена.\n\n"
+                                        + "Работает с режимом VPN в ByeByeDPI.")
+                                .setPositiveButton("OK", null)
+                                .show();
+                    }
+                })
+                .show();
+    }
+
+    // ------------------------------------------------------------ голосовой поиск
+
+    private void voiceSearch() {
+        String[] actions = {
+                "android.intent.action.ASSIST",
+                "android.intent.action.VOICE_ASSIST",
+                "android.speech.action.WEB_SEARCH",
+                "android.search.action.GLOBAL_SEARCH",
+                "android.intent.action.WEB_SEARCH",
+        };
+        for (String a : actions) {
+            try {
+                startActivity(new Intent(a).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+                return;
+            } catch (Exception ignored) {
+            }
+        }
+        toast("Голосовой поиск на этой приставке недоступен");
+    }
+
+    // ------------------------------------------------------------ очистка памяти
+
+    private void cleanMemory() {
+        toast("Очищаю память…");
+        final List<String> pkgs = new ArrayList<>(installedPackages());
+        worker.execute(() -> {
+            final MemoryCleaner.Result r = MemoryCleaner.clean(this, pkgs);
+            ui.post(() -> {
+                long gained = r.afterFree - r.beforeFree;
+                String msg = "Закрыто фоновых приложений: " + r.closed + "\n"
+                        + "Свободно памяти: " + MemoryCleaner.size(this, r.afterFree)
+                        + " из " + MemoryCleaner.size(this, r.total);
+                if (gained > 0) msg += "\nОсвобождено: " + MemoryCleaner.size(this, gained);
+                dialog().setTitle("🧹 Очистка памяти")
+                        .setMessage(msg + "\n\nByeByeDPI и клавиатура не закрываются.")
+                        .setPositiveButton("OK", null)
+                        .show();
+                updateStatus();
+            });
+        });
+    }
+
+    // ------------------------------------------------------------ таймер сна
+
+    private void updateSleepButton() {
+        if (sleepButton == null) return;
+        long left = SleepTimer.remaining(this);
+        sleepButton.setText(left > 0 ? "⏾ " + ((left + 59_999) / 60_000) + " мин" : "⏾");
+    }
+
+    private void showSleepTimer() {
+        final int[] mins = {0, 15, 30, 45, 60, 90, 120};
+        String[] items = new String[mins.length + 1];
+        long left = SleepTimer.remaining(this);
+        items[0] = left > 0 ? "Выключить таймер (осталось " + ((left + 59_999) / 60_000) + " мин)" : "Таймер выключен";
+        for (int i = 1; i < mins.length; i++) items[i] = "Через " + mins[i] + " мин";
+        items[mins.length] = "Выключить экран сейчас";
+        dialog().setTitle("⏾ Таймер сна")
+                .setItems(items, (d, which) -> {
+                    if (which == 0) {
+                        SleepTimer.cancel(this);
+                        toast("Таймер сна выключен");
+                    } else if (which == mins.length) {
+                        SleepTimer.sleepNow(this);
+                    } else {
+                        SleepTimer.set(this, mins[which]);
+                        toast("Экран выключится через " + mins[which] + " мин");
+                        if (!SleepTimer.adminActive(this)) askAdmin();
+                    }
+                    updateSleepButton();
+                })
+                .show();
+    }
+
+    private void askAdmin() {
+        dialog().setTitle("Разрешить выключение экрана")
+                .setMessage("Чтобы таймер сна мог выключать экран, разрешите NightTV «блокировку экрана». "
+                        + "Без этого по таймеру видео встанет на паузу и включится чёрный экран.\n\n"
+                        + "Если позже захотите удалить NightTV, сначала снимите это разрешение: "
+                        + "Настройки Android → Безопасность → Администраторы устройства.")
+                .setPositiveButton("Разрешить", (d, w) -> safeStart(
+                        new Intent(android.app.admin.DevicePolicyManager.ACTION_ADD_DEVICE_ADMIN)
+                                .putExtra(android.app.admin.DevicePolicyManager.EXTRA_DEVICE_ADMIN, SleepTimer.admin(this))
+                                .putExtra(android.app.admin.DevicePolicyManager.EXTRA_ADD_EXPLANATION,
+                                        "Нужно таймеру сна NightTV, чтобы выключать экран.")))
+                .setNegativeButton("Не нужно", null)
+                .show();
+    }
+
+    // ------------------------------------------------------------ заставка
+
+    private View buildSaver() {
+        saverView = new FrameLayout(this);
+        saverView.setBackgroundColor(0xFF000000);
+        saverView.setVisibility(View.GONE);
+        saverView.setFocusable(false);
+
+        saverContent = new LinearLayout(this);
+        saverContent.setOrientation(LinearLayout.VERTICAL);
+        saverContent.setPadding(dp(48), dp(32), dp(48), dp(32));
+
+        TextClock clock = new TextClock(this);
+        clock.setFormat24Hour("HH:mm");
+        clock.setFormat12Hour("h:mm");
+        clock.setTextSize(TypedValue.COMPLEX_UNIT_SP, 110);
+        clock.setTextColor(0xFFFFFFFF);
+        clock.setTypeface(Typeface.create("sans-serif-thin", Typeface.NORMAL));
+        saverContent.addView(clock);
+
+        TextClock date = new TextClock(this);
+        date.setFormat24Hour("EEEE, d MMMM");
+        date.setFormat12Hour("EEEE, d MMMM");
+        date.setTextSize(TypedValue.COMPLEX_UNIT_SP, 26);
+        date.setTextColor(0xCCFFFFFF);
+        saverContent.addView(date);
+
+        saverWeather = new TextView(this);
+        saverWeather.setTextSize(TypedValue.COMPLEX_UNIT_SP, 24);
+        saverWeather.setTextColor(0xAAFFFFFF);
+        saverWeather.setPadding(0, dp(12), 0, 0);
+        saverContent.addView(saverWeather);
+
+        saverView.addView(saverContent, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        return saverView;
+    }
+
+    /** black = true — просто чёрный экран (таймер сна без права блокировки). */
+    private void showSaver(boolean black) {
+        if (saverView == null) return;
+        if (folderDialog != null && folderDialog.isShowing()) folderDialog.dismiss();
+        saverShowing = true;
+        saverContent.setVisibility(black ? View.GONE : View.VISIBLE);
+        CharSequence w = weatherView != null && weatherView.getVisibility() == View.VISIBLE
+                ? weatherView.getText() : "";
+        saverWeather.setText(w);
+        saverWeather.setVisibility(w.length() > 0 ? View.VISIBLE : View.GONE);
+        // ночью заставка темнее
+        saverContent.setAlpha(1f);
+        saverView.setAlpha(0f);
+        saverView.setVisibility(View.VISIBLE);
+        saverView.animate().alpha(1f).setDuration(800).start();
+        float dim = NightMode.isNight(prefs.nightMode(), prefs.nightSchedule()) ? 0.45f : 0.8f;
+        saverContent.setScaleX(1f);
+        for (int i = 0; i < saverContent.getChildCount(); i++) saverContent.getChildAt(i).setAlpha(dim);
+        ui.removeCallbacks(saverMove);
+        if (!black) ui.postDelayed(saverMove, 1000);
+    }
+
+    private void hideSaver() {
+        saverShowing = false;
+        ui.removeCallbacks(saverMove);
+        if (saverView != null) saverView.setVisibility(View.GONE);
+        lastInput = System.currentTimeMillis();
+    }
+
+    private void chooseSaver() {
+        String[] labels = new String[SAVER_OPTIONS.length];
+        int current = 0;
+        for (int i = 0; i < SAVER_OPTIONS.length; i++) {
+            labels[i] = SAVER_OPTIONS[i] == 0 ? "Выключена" : "Через " + SAVER_OPTIONS[i] + " мин простоя";
+            if (SAVER_OPTIONS[i] == prefs.saverMinutes()) current = i;
+        }
+        dialog().setTitle("Заставка")
+                .setSingleChoiceItems(labels, current, (d, which) -> {
+                    prefs.setSaverMinutes(SAVER_OPTIONS[which]);
+                    d.dismiss();
+                })
+                .setNeutralButton("Показать сейчас", (d, w) -> showSaver(false))
+                .show();
+    }
+
+    // ------------------------------------------------------------ ночной режим
+
+    private void applyNight() {
+        boolean night = NightMode.isNight(prefs.nightMode(), prefs.nightSchedule());
+        boolean system = NightMode.applySystem(this, night, prefs.nightDim());
+        // Если затемнение поверх всех приложений недоступно — затемняем хотя бы главный экран
+        if (launcherDim != null) {
+            launcherDim.setBackgroundColor(NightMode.color(prefs.nightDim()));
+            launcherDim.setVisibility(night && !system ? View.VISIBLE : View.GONE);
+        }
+    }
+
+    private void showNightSettings() {
+        String perm = NightMode.canOverlay(this) ? "есть" : "нет — затемняется только NightTV";
+        String[] items = {
+                "Режим: " + NightMode.MODES[Math.max(0, Math.min(2, prefs.nightMode()))],
+                "Время: " + NightMode.scheduleName(prefs.nightSchedule()),
+                "Затемнение: " + prefs.nightDim() + "%",
+                "Затемнять все приложения: " + perm,
+        };
+        dialog().setTitle("🌙 Ночной режим")
+                .setItems(items, (d, which) -> {
+                    if (which == 0) {
+                        dialog().setTitle("Режим")
+                                .setSingleChoiceItems(NightMode.MODES, prefs.nightMode(), (d2, w) -> {
+                                    prefs.setNightMode(w);
+                                    applyNight();
+                                    d2.dismiss();
+                                    if (w != 0 && !NightMode.canOverlay(this)) askOverlay();
+                                })
+                                .show();
+                    } else if (which == 1) {
+                        String[] names = new String[NightMode.SCHEDULES.length];
+                        for (int i = 0; i < names.length; i++) names[i] = NightMode.scheduleName(i);
+                        dialog().setTitle("Время ночного режима")
+                                .setSingleChoiceItems(names, prefs.nightSchedule(), (d2, w) -> {
+                                    prefs.setNightSchedule(w);
+                                    applyNight();
+                                    d2.dismiss();
+                                })
+                                .show();
+                    } else if (which == 2) {
+                        String[] names = new String[NightMode.DIMS.length];
+                        int cur = 0;
+                        for (int i = 0; i < names.length; i++) {
+                            names[i] = NightMode.DIMS[i] + "%";
+                            if (NightMode.DIMS[i] == prefs.nightDim()) cur = i;
+                        }
+                        dialog().setTitle("Сила затемнения")
+                                .setSingleChoiceItems(names, cur, (d2, w) -> {
+                                    prefs.setNightDim(NightMode.DIMS[w]);
+                                    applyNight();
+                                    d2.dismiss();
+                                })
+                                .show();
+                    } else {
+                        askOverlay();
+                    }
+                })
+                .show();
+    }
+
+    private void askOverlay() {
+        if (NightMode.canOverlay(this)) {
+            toast("Разрешение уже есть — затемняются все приложения");
+            return;
+        }
+        dialog().setTitle("Затемнять все приложения")
+                .setMessage("Чтобы ночной режим затемнял фильмы и YouTube, а не только главный экран, "
+                        + "разрешите NightTV «показ поверх других приложений».\n\n"
+                        + "Если на приставке такого пункта нет, выполните с компьютера:\n"
+                        + "adb shell appops set " + getPackageName() + " SYSTEM_ALERT_WINDOW allow")
+                .setPositiveButton("Открыть настройки", (d, w) -> safeStart(
+                        new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                                Uri.parse("package:" + getPackageName()))
+                                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)))
+                .setNegativeButton("Позже", null)
+                .show();
+    }
+
     // ------------------------------------------------------------ строка состояния
 
     /** Последний результат проверки интернета (null — ещё не проверяли). */
@@ -1413,7 +1883,12 @@ public class MainActivity extends Activity {
         netChecking = true;
         netWorker.execute(() -> {
             final NetCheck.Quick q = NetCheck.quick();
+            final Boolean yt = q.online
+                    ? NetCheck.ping("https://www.youtube.com/generate_204", 5000) >= 0
+                    : null;
             ui.post(() -> {
+                ytReachable = yt;
+                if (yt != null && !yt) rescueYouTube(false);
                 boolean wasOffline = netState != null && !netState.online;
                 netChecking = false;
                 netCheckedAt = System.currentTimeMillis();
@@ -1449,7 +1924,14 @@ public class MainActivity extends Activity {
         android.text.SpannableStringBuilder sb = new android.text.SpannableStringBuilder();
         sb.append("● ");
         sb.setSpan(new android.text.style.ForegroundColorSpan(color), 0, 1, 0);
-        sb.append(net).append("   ·   ").append(local);
+        sb.append(net);
+        if (ytReachable != null) {
+            sb.append("   ·   YouTube ").append(ytReachable ? "✓" : "✕");
+        }
+        if (DpiRescue.installed(this)) {
+            sb.append("   ·   DPI ").append(DpiRescue.vpnActive(this) ? "вкл" : "выкл");
+        }
+        sb.append("   ·   ").append(local);
         statusView.setText(sb);
     }
 

@@ -243,6 +243,53 @@ final class Prefs {
         sp.edit().putString("cat_custom", new JSONArray(l).toString()).apply();
     }
 
+    // ---- Автоспасение YouTube ----
+
+    boolean dpiAuto() {
+        return sp.getBoolean("dpi_auto", true);
+    }
+
+    void setDpiAuto(boolean on) {
+        sp.edit().putBoolean("dpi_auto", on).apply();
+    }
+
+    // ---- Заставка ----
+
+    /** Минут простоя до заставки (0 — выключена). */
+    int saverMinutes() {
+        return sp.getInt("saver_min", 5);
+    }
+
+    void setSaverMinutes(int m) {
+        sp.edit().putInt("saver_min", m).apply();
+    }
+
+    // ---- Ночной режим ----
+
+    int nightMode() {
+        return sp.getInt("night_mode", 0);
+    }
+
+    void setNightMode(int m) {
+        sp.edit().putInt("night_mode", m).apply();
+    }
+
+    int nightSchedule() {
+        return sp.getInt("night_sched", 1);
+    }
+
+    void setNightSchedule(int s) {
+        sp.edit().putInt("night_sched", s).apply();
+    }
+
+    int nightDim() {
+        return sp.getInt("night_dim", 50);
+    }
+
+    void setNightDim(int d) {
+        sp.edit().putInt("night_dim", d).apply();
+    }
+
     // ---- Обновления ----
 
     long lastUpdateCheck() {
