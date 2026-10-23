@@ -127,6 +127,11 @@ public class MainActivity extends Activity {
     private Boolean ytReachable;
     private long lastRescueAt;
     private boolean rescueHintShown;
+    private boolean filterHintShown;
+    private int ytFails;
+    private int rescueAttempts;
+    /** VPN ByeByeDPI работает, но NightTV не входит в её «Фильтр приложений». */
+    private boolean dpiBypassesUs;
     private static final long RESCUE_PAUSE_MS = 5 * 60 * 1000L;
 
     /** Тег плитки, на которую вернуть фокус после перерисовки. */
@@ -215,6 +220,7 @@ public class MainActivity extends Activity {
         }
         loadYouTube(false);
         lastInput = System.currentTimeMillis();
+        netCheckedAt = 0; // при возврате на главный экран — сразу свежая проверка
         ui.removeCallbacks(saverTask);
         ui.post(saverTask);
         applyNight();
@@ -1547,8 +1553,10 @@ public class MainActivity extends Activity {
             return;
         }
         if (!manual && (!prefs.dpiAuto()
-                || System.currentTimeMillis() - lastRescueAt < RESCUE_PAUSE_MS)) return;
+                || System.currentTimeMillis() - lastRescueAt < RESCUE_PAUSE_MS
+                || rescueAttempts >= 2)) return; // после двух безуспешных попыток не дёргаем ByeByeDPI
         lastRescueAt = System.currentTimeMillis();
+        rescueAttempts++;
 
         if (!DpiRescue.vpnActive(this)) {
             toast("YouTube недоступен — включаю ByeByeDPI");
@@ -1575,6 +1583,27 @@ public class MainActivity extends Activity {
             netCheckedAt = 0;
             checkInternetQuick();
         }, 10_000L);
+    }
+
+    private void showFilterHint() {
+        if (filterHintShown || !hasWindowFocus()) return;
+        filterHintShown = true;
+        dialog().setTitle("NightTV не видит YouTube")
+                .setMessage("ByeByeDPI работает, но в ней включён «Фильтр приложений», "
+                        + "и NightTV в него не входит. Поэтому проверка из лаунчера показывает, "
+                        + "что YouTube недоступен, хотя в самом YouTube всё работает. "
+                        + "Ряды YouTube в NightTV из-за этого тоже могут не загружаться.\n\n"
+                        + "Как исправить — в ByeByeDPI:\n"
+                        + "Настройки → Фильтр приложений:\n"
+                        + "• «Белый список» → Выбрать приложения → отметьте NightTV;\n"
+                        + "• или «Чёрный список» / «Нет».\n\n"
+                        + "Пока так, автоспасение ByeByeDPI не перезапускает.")
+                .setPositiveButton("Открыть ByeByeDPI", (d, w) -> {
+                    Intent i = getPackageManager().getLaunchIntentForPackage(DpiRescue.PKG);
+                    if (i != null) safeStart(i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+                })
+                .setNegativeButton("Понятно", null)
+                .show();
     }
 
     private void chooseDpiAuto() {
@@ -1883,12 +1912,25 @@ public class MainActivity extends Activity {
         netChecking = true;
         netWorker.execute(() -> {
             final NetCheck.Quick q = NetCheck.quick();
-            final Boolean yt = q.online
-                    ? NetCheck.ping("https://www.youtube.com/generate_204", 5000) >= 0
-                    : null;
+            final Boolean yt = q.online ? NetCheck.youtube() : null;
+            final boolean bypass = DpiRescue.installed(this) && DpiRescue.vpnActive(this)
+                    && !DpiRescue.selfRouted(this);
             ui.post(() -> {
                 ytReachable = yt;
-                if (yt != null && !yt) rescueYouTube(false);
+                dpiBypassesUs = bypass;
+                if (yt != null && yt) {
+                    ytFails = 0;
+                    rescueAttempts = 0;
+                } else if (yt != null) {
+                    ytFails++;
+                    if (bypass) {
+                        // Проверка из NightTV ничего не говорит о YouTube — ByeByeDPI не трогаем
+                        showFilterHint();
+                    } else if (ytFails >= 2) {
+                        // Две неудачи подряд — тогда спасаем
+                        rescueYouTube(false);
+                    }
+                }
                 boolean wasOffline = netState != null && !netState.online;
                 netChecking = false;
                 netCheckedAt = System.currentTimeMillis();
@@ -1926,7 +1968,11 @@ public class MainActivity extends Activity {
         sb.setSpan(new android.text.style.ForegroundColorSpan(color), 0, 1, 0);
         sb.append(net);
         if (ytReachable != null) {
-            sb.append("   ·   YouTube ").append(ytReachable ? "✓" : "✕");
+            if (!ytReachable && dpiBypassesUs) {
+                sb.append("   ·   YouTube ? (NightTV не в списке ByeByeDPI)");
+            } else {
+                sb.append("   ·   YouTube ").append(ytReachable ? "✓" : "✕");
+            }
         }
         if (DpiRescue.installed(this)) {
             sb.append("   ·   DPI ").append(DpiRescue.vpnActive(this) ? "вкл" : "выкл");
@@ -1955,8 +2001,15 @@ public class MainActivity extends Activity {
             long yandex = NetCheck.ping("https://ya.ru/", 5000);
             r.append(yandex >= 0 ? "✓" : "✕").append(" Яндекс: ").append(NetCheck.ms(yandex)).append('\n');
 
-            long yt = NetCheck.ping("https://www.youtube.com/generate_204", 6000);
-            r.append(yt >= 0 ? "✓" : "✕").append(" YouTube: ").append(NetCheck.ms(yt)).append('\n');
+            long yt = NetCheck.ping("https://www.youtube.com/generate_204", 7000);
+            if (yt < 0 && NetCheck.youtube()) yt = 0;
+            r.append(yt >= 0 ? "✓" : "✕").append(" YouTube: ").append(yt > 0 ? NetCheck.ms(yt) : (yt == 0 ? "доступен" : "нет ответа")).append('\n');
+            boolean bypass = DpiRescue.installed(this) && DpiRescue.vpnActive(this) && !DpiRescue.selfRouted(this);
+            if (DpiRescue.installed(this)) {
+                r.append("ByeByeDPI: ").append(DpiRescue.vpnActive(this) ? "включена" : "выключена");
+                if (bypass) r.append(", но NightTV не в её списке приложений");
+                r.append('\n');
+            }
 
             long ytImg = NetCheck.ping("https://i.ytimg.com/generate_204", 6000);
             r.append(ytImg >= 0 ? "✓" : "✕").append(" Превью YouTube: ").append(NetCheck.ms(ytImg)).append('\n');
@@ -1973,6 +2026,9 @@ public class MainActivity extends Activity {
                 r.append("Итог: интернета нет. Проверьте Wi‑Fi или кабель и роутер.");
             } else if (!online) {
                 r.append("Итог: сеть есть, но сайты не открываются. Перезагрузите роутер.");
+            } else if (yt < 0 && bypass) {
+                r.append("Итог: интернет работает. YouTube из NightTV не виден, потому что NightTV "
+                        + "не входит в «Фильтр приложений» ByeByeDPI — добавьте его туда.");
             } else if (yt < 0) {
                 r.append("Итог: интернет работает, YouTube недоступен. Проверьте ByeByeDPI.");
             } else {

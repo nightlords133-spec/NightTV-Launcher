@@ -114,6 +114,19 @@ final class NetCheck {
         }
     }
 
+    /** Доступен ли YouTube: несколько адресов, увеличенное ожидание. */
+    static boolean youtube() {
+        String[] urls = {
+                "https://www.youtube.com/generate_204",
+                "https://m.youtube.com/favicon.ico",
+                "https://www.youtube.com/favicon.ico",
+        };
+        for (String u : urls) {
+            if (ping(u, 7000) >= 0) return true;
+        }
+        return false;
+    }
+
     static String ms(long v) {
         return v < 0 ? "нет ответа" : v + " мс";
     }

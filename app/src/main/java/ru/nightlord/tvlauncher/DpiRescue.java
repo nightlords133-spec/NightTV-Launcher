@@ -38,6 +38,23 @@ final class DpiRescue {
         return false;
     }
 
+    /**
+     * Идёт ли трафик самого NightTV через VPN. Если в ByeByeDPI включён «Фильтр приложений»
+     * и NightTV в него не входит, VPN есть, но наш трафик идёт мимо него.
+     */
+    static boolean selfRouted(Context c) {
+        if (android.os.Build.VERSION.SDK_INT < 23) return true;
+        try {
+            ConnectivityManager cm = (ConnectivityManager) c.getSystemService(Context.CONNECTIVITY_SERVICE);
+            Network active = cm.getActiveNetwork();
+            if (active == null) return false;
+            NetworkCapabilities nc = cm.getNetworkCapabilities(active);
+            return nc != null && nc.hasTransport(NetworkCapabilities.TRANSPORT_VPN);
+        } catch (Exception e) {
+            return true;
+        }
+    }
+
     static boolean start(Context c) {
         return toggle(c, "only_start");
     }
