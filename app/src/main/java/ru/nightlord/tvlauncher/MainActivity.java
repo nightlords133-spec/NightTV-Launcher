@@ -174,6 +174,7 @@ public class MainActivity extends Activity {
             }
         }
         worker.shutdownNow();
+        netWorker.shutdownNow();
         ytWorker.shutdownNow();
         images.shutdown();
     }
@@ -330,8 +331,25 @@ public class MainActivity extends Activity {
         timeBox.addView(date);
 
         statusView = text(14, 0.6f);
-        statusView.setPadding(0, dp(6), 0, 0);
-        timeBox.addView(statusView);
+        statusView.setPadding(dp(10), dp(4), dp(10), dp(4));
+        // Строку состояния можно выбрать пультом: ОК — подробная проверка интернета
+        final GradientDrawable statusBg = new GradientDrawable();
+        statusBg.setCornerRadius(dp(14));
+        statusBg.setColor(0x00000000);
+        statusView.setBackground(statusBg);
+        statusView.setFocusable(true);
+        statusView.setClickable(true);
+        statusView.setTag("status");
+        statusView.setOnClickListener(v -> runNetworkTest());
+        statusView.setOnFocusChangeListener((v, focused) -> {
+            statusBg.setColor(focused ? 0x33FFFFFF : 0x00000000);
+            statusBg.setStroke(focused ? dp(2) : 0, Themes.accent(prefs.theme()));
+            v.setAlpha(focused ? 1f : 0.6f);
+        });
+        LinearLayout.LayoutParams stLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        stLp.setMargins(-dp(10), dp(4), 0, 0);
+        timeBox.addView(statusView, stLp);
 
         header.addView(timeBox);
 
@@ -999,6 +1017,7 @@ public class MainActivity extends Activity {
                 "Скрытые приложения (" + prefs.hidden().size() + ")",
                 "Очистить «Недавние»",
                 "Проверить обновления",
+                "Проверить интернет и скорость",
                 "Системные настройки Android",
                 "О программе",
         };
@@ -1018,7 +1037,8 @@ public class MainActivity extends Activity {
                             toast("Список недавних очищен");
                             break;
                         case 7: checkUpdates(true); break;
-                        case 8: safeStart(new Intent(Settings.ACTION_SETTINGS)
+                        case 8: runNetworkTest(); break;
+                        case 9: safeStart(new Intent(Settings.ACTION_SETTINGS)
                                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)); break;
                         default: showAbout(); break;
                     }
@@ -1369,11 +1389,123 @@ public class MainActivity extends Activity {
 
     // ------------------------------------------------------------ строка состояния
 
+    /** Последний результат проверки интернета (null — ещё не проверяли). */
+    private NetCheck.Quick netState;
+    private long netCheckedAt;
+    private boolean netChecking;
+    private final ExecutorService netWorker = Executors.newSingleThreadExecutor();
+    private static final long NET_PERIOD_MS = 60 * 1000L;
+
     private void updateStatus() {
         if (statusView == null) return;
         worker.execute(() -> {
             final String s = NetStatus.read(this);
-            ui.post(() -> statusView.setText(s));
+            ui.post(() -> showStatus(s));
+        });
+        if (!netChecking && System.currentTimeMillis() - netCheckedAt > NET_PERIOD_MS) {
+            checkInternetQuick();
+        }
+    }
+
+    private String lastLocalStatus = "";
+
+    private void checkInternetQuick() {
+        netChecking = true;
+        netWorker.execute(() -> {
+            final NetCheck.Quick q = NetCheck.quick();
+            ui.post(() -> {
+                boolean wasOffline = netState != null && !netState.online;
+                netChecking = false;
+                netCheckedAt = System.currentTimeMillis();
+                netState = q;
+                showStatus(lastLocalStatus);
+                // Интернет вернулся — сразу обновляем погоду и YouTube
+                if (wasOffline && q.online) {
+                    updateWeather();
+                    loadYouTube(true);
+                }
+            });
+        });
+    }
+
+    /** Строка состояния: цветная точка интернета + сеть, IP и память. */
+    private void showStatus(String local) {
+        lastLocalStatus = local;
+        String net;
+        int color;
+        if (netState == null) {
+            net = "Проверка интернета…";
+            color = 0xFFB0BEC5;
+        } else if (!netState.online) {
+            net = "Нет интернета";
+            color = 0xFFEF5350;
+        } else if (netState.latencyMs > 800) {
+            net = "Интернет медленный · " + netState.latencyMs + " мс";
+            color = 0xFFFFCA28;
+        } else {
+            net = "Интернет есть · " + netState.latencyMs + " мс";
+            color = 0xFF66BB6A;
+        }
+        android.text.SpannableStringBuilder sb = new android.text.SpannableStringBuilder();
+        sb.append("● ");
+        sb.setSpan(new android.text.style.ForegroundColorSpan(color), 0, 1, 0);
+        sb.append(net).append("   ·   ").append(local);
+        statusView.setText(sb);
+    }
+
+    /** Подробная проверка: сеть, DNS, интернет, YouTube, скорость. */
+    private void runNetworkTest() {
+        final android.app.AlertDialog dlg = dialog()
+                .setTitle("Проверка интернета")
+                .setMessage("Проверяю… это займёт до 15 секунд")
+                .setPositiveButton("Закрыть", null)
+                .show();
+        netWorker.execute(() -> {
+            StringBuilder r = new StringBuilder();
+            r.append("Сеть: ").append(NetStatus.read(this)).append("\n\n");
+
+            long dns = NetCheck.dns("ya.ru");
+            r.append(dns >= 0 ? "✓" : "✕").append(" DNS: ").append(NetCheck.ms(dns)).append('\n');
+
+            long google = NetCheck.ping("https://connectivitycheck.gstatic.com/generate_204", 5000);
+            r.append(google >= 0 ? "✓" : "✕").append(" Google: ").append(NetCheck.ms(google)).append('\n');
+
+            long yandex = NetCheck.ping("https://ya.ru/", 5000);
+            r.append(yandex >= 0 ? "✓" : "✕").append(" Яндекс: ").append(NetCheck.ms(yandex)).append('\n');
+
+            long yt = NetCheck.ping("https://www.youtube.com/generate_204", 6000);
+            r.append(yt >= 0 ? "✓" : "✕").append(" YouTube: ").append(NetCheck.ms(yt)).append('\n');
+
+            long ytImg = NetCheck.ping("https://i.ytimg.com/generate_204", 6000);
+            r.append(ytImg >= 0 ? "✓" : "✕").append(" Превью YouTube: ").append(NetCheck.ms(ytImg)).append('\n');
+
+            boolean online = google >= 0 || yandex >= 0;
+            if (online) {
+                ui.post(() -> dlg.setMessage(r + "\nИзмеряю скорость…"));
+                double speed = NetCheck.downloadMbps(6000);
+                r.append("\nСкорость загрузки: ").append(NetCheck.mbps(speed)).append('\n');
+            }
+
+            r.append('\n');
+            if (!online && dns < 0) {
+                r.append("Итог: интернета нет. Проверьте Wi‑Fi или кабель и роутер.");
+            } else if (!online) {
+                r.append("Итог: сеть есть, но сайты не открываются. Перезагрузите роутер.");
+            } else if (yt < 0) {
+                r.append("Итог: интернет работает, YouTube недоступен. Проверьте ByeByeDPI.");
+            } else {
+                r.append("Итог: всё работает.");
+            }
+
+            final NetCheck.Quick q = new NetCheck.Quick();
+            q.online = online;
+            q.latencyMs = google >= 0 ? google : yandex;
+            ui.post(() -> {
+                netState = q;
+                netCheckedAt = System.currentTimeMillis();
+                showStatus(lastLocalStatus);
+                if (dlg.isShowing()) dlg.setMessage(r.toString());
+            });
         });
     }
 
