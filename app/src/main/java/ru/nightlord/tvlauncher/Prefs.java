@@ -290,6 +290,33 @@ final class Prefs {
         sp.edit().putInt("night_dim", d).apply();
     }
 
+    // ---- Обои ----
+
+    int wallMode() {
+        return sp.getInt("wall_mode", 0);
+    }
+
+    void setWallMode(int m) {
+        sp.edit().putInt("wall_mode", m).apply();
+    }
+
+    int wallDim() {
+        return sp.getInt("wall_dim", 40);
+    }
+
+    void setWallDim(int d) {
+        sp.edit().putInt("wall_dim", d).apply();
+    }
+
+    /** "режим:дата" последней загрузки фото дня. */
+    String wallDay() {
+        return sp.getString("wall_day", "");
+    }
+
+    void setWallDay(String d) {
+        sp.edit().putString("wall_day", d).apply();
+    }
+
     // ---- Обновления ----
 
     long lastUpdateCheck() {

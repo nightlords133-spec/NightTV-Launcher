@@ -34,6 +34,7 @@ import android.widget.TextClock;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import java.io.File;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -120,6 +121,12 @@ public class MainActivity extends Activity {
     private boolean saverSwallowUp;
     private long lastInput = System.currentTimeMillis();
     private View launcherDim;
+    private ImageView wallView;
+    private View wallDim;
+    private ImageView saverImage;
+    private List<File> wallFiles;
+    private static final int REQ_PICK_IMAGE = 41;
+    private static final int REQ_READ_IMAGES = 42;
     private static final long SAVER_MOVE_MS = 20 * 1000L;
     private static final int[] SAVER_OPTIONS = {0, 2, 5, 10, 15, 30};
 
@@ -200,6 +207,7 @@ public class MainActivity extends Activity {
         prefs = new Prefs(this);
         repo = new AppRepository(this);
         buildUi();
+        applyWallpaper();
         registerPackageReceiver();
         ui.post(nightTask);
         if (getIntent() != null && getIntent().getBooleanExtra(SleepTimer.EXTRA_BLACK, false)) {
@@ -219,6 +227,7 @@ public class MainActivity extends Activity {
             checkUpdates(false);
         }
         loadYouTube(false);
+        refreshDailyWallpaper(false);
         lastInput = System.currentTimeMillis();
         netCheckedAt = 0; // при возврате на главный экран — сразу свежая проверка
         ui.removeCallbacks(saverTask);
@@ -316,6 +325,16 @@ public class MainActivity extends Activity {
     private void buildUi() {
         root = new FrameLayout(this);
         root.setBackground(Themes.background(prefs.theme()));
+
+        wallView = new ImageView(this);
+        wallView.setScaleType(ImageView.ScaleType.CENTER_CROP);
+        wallView.setVisibility(View.GONE);
+        root.addView(wallView, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        wallDim = new View(this);
+        wallDim.setVisibility(View.GONE);
+        root.addView(wallDim, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
         scroll = new ScrollView(this);
         scroll.setFillViewport(true);
@@ -1139,6 +1158,7 @@ public class MainActivity extends Activity {
         String weather = prefs.weatherOn() ? prefs.city() : "выключена";
         String[] items = {
                 "Тема: " + Themes.NAMES[Themes.safe(prefs.theme())],
+                "Обои: " + Wallpaper.MODES[Math.max(0, Math.min(4, prefs.wallMode()))] + "…",
                 "Колонок в сетке: " + prefs.columns(),
                 "Вид приложений: " + GROUP_MODES[Math.max(0, Math.min(2, prefs.groupMode()))],
                 "Погода: " + weather,
@@ -1157,23 +1177,24 @@ public class MainActivity extends Activity {
                 .setItems(items, (d, which) -> {
                     switch (which) {
                         case 0: chooseTheme(); break;
-                        case 1: chooseColumns(); break;
-                        case 2: chooseGroupMode(); break;
-                        case 3: chooseCity(); break;
-                        case 4: showYouTubeSettings(); break;
-                        case 5: chooseDpiAuto(); break;
-                        case 6: chooseSaver(); break;
-                        case 7: showNightSettings(); break;
-                        case 8: chooseHidden(); break;
-                        case 9:
+                        case 1: showWallpaperSettings(); break;
+                        case 2: chooseColumns(); break;
+                        case 3: chooseGroupMode(); break;
+                        case 4: chooseCity(); break;
+                        case 5: showYouTubeSettings(); break;
+                        case 6: chooseDpiAuto(); break;
+                        case 7: chooseSaver(); break;
+                        case 8: showNightSettings(); break;
+                        case 9: chooseHidden(); break;
+                        case 10:
                             prefs.clearRecents();
                             pendingFocus = "settings";
                             render();
                             toast("Список недавних очищен");
                             break;
-                        case 10: checkUpdates(true); break;
-                        case 11: runNetworkTest(); break;
-                        case 12: safeStart(new Intent(Settings.ACTION_SETTINGS)
+                        case 11: checkUpdates(true); break;
+                        case 12: runNetworkTest(); break;
+                        case 13: safeStart(new Intent(Settings.ACTION_SETTINGS)
                                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)); break;
                         default: showAbout(); break;
                     }
@@ -1723,11 +1744,273 @@ public class MainActivity extends Activity {
                 .show();
     }
 
+    // ------------------------------------------------------------ обои
+
+    private void applyWallpaper() {
+        if (prefs.wallMode() == Wallpaper.THEME || !Wallpaper.file(this).exists()) {
+            wallView.setVisibility(View.GONE);
+            wallDim.setVisibility(View.GONE);
+            wallView.setImageDrawable(null);
+            if (saverImage != null) {
+                saverImage.setImageDrawable(null);
+                saverImage.setVisibility(View.GONE);
+            }
+            return;
+        }
+        final int w = getResources().getDisplayMetrics().widthPixels;
+        final int h = getResources().getDisplayMetrics().heightPixels;
+        worker.execute(() -> {
+            final android.graphics.Bitmap bmp = Wallpaper.load(this, w, h);
+            ui.post(() -> {
+                if (bmp == null) {
+                    wallView.setVisibility(View.GONE);
+                    wallDim.setVisibility(View.GONE);
+                    return;
+                }
+                wallView.setImageBitmap(bmp);
+                wallView.setAlpha(0f);
+                wallView.setVisibility(View.VISIBLE);
+                wallView.animate().alpha(1f).setDuration(500).start();
+                // затемнение + снизу темнее, чтобы плитки и подписи читались
+                int a = Math.round(prefs.wallDim() * 2.55f);
+                GradientDrawable g = new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,
+                        new int[]{android.graphics.Color.argb(a, 0, 0, 0),
+                                android.graphics.Color.argb(Math.min(255, a + 60), 0, 0, 0)});
+                wallDim.setBackground(g);
+                wallDim.setVisibility(View.VISIBLE);
+                if (saverImage != null) {
+                    saverImage.setImageBitmap(bmp);
+                    saverImage.setVisibility(View.VISIBLE);
+                }
+            });
+        });
+    }
+
+    /** Фото дня скачивается раз в сутки. */
+    private void refreshDailyWallpaper(boolean force) {
+        final int mode = prefs.wallMode();
+        if (mode != Wallpaper.BING && mode != Wallpaper.RANDOM) return;
+        final String key = mode + ":" + Wallpaper.today();
+        if (!force && key.equals(prefs.wallDay()) && Wallpaper.file(this).exists()) return;
+        worker.execute(() -> {
+            try {
+                Wallpaper.downloadDaily(this, mode);
+                ui.post(() -> {
+                    prefs.setWallDay(key);
+                    applyWallpaper();
+                });
+            } catch (Exception e) {
+                final String m = e.getMessage();
+                if (force) ui.post(() -> toast("Не удалось загрузить фото: " + m));
+            }
+        });
+    }
+
+    private void showWallpaperSettings() {
+        String[] items = {
+                "Источник: " + Wallpaper.MODES[Math.max(0, Math.min(4, prefs.wallMode()))],
+                "Затемнение: " + prefs.wallDim() + "%",
+                "Обновить фото дня сейчас",
+        };
+        dialog().setTitle("🖼 Обои")
+                .setItems(items, (d, which) -> {
+                    if (which == 0) chooseWallpaperSource();
+                    else if (which == 1) chooseWallDim();
+                    else {
+                        if (prefs.wallMode() == Wallpaper.BING || prefs.wallMode() == Wallpaper.RANDOM) {
+                            toast("Загружаю фото…");
+                            refreshDailyWallpaper(true);
+                        } else {
+                            toast("Сначала выберите «Фото дня Bing» или «Случайное фото дня»");
+                        }
+                    }
+                })
+                .show();
+    }
+
+    private void chooseWallpaperSource() {
+        dialog().setTitle("Источник обоев")
+                .setSingleChoiceItems(Wallpaper.MODES, prefs.wallMode(), (d, which) -> {
+                    d.dismiss();
+                    switch (which) {
+                        case Wallpaper.THEME:
+                            prefs.setWallMode(Wallpaper.THEME);
+                            applyWallpaper();
+                            break;
+                        case Wallpaper.BING:
+                        case Wallpaper.RANDOM:
+                            prefs.setWallMode(which);
+                            prefs.setWallDay("");
+                            toast("Загружаю фото дня…");
+                            refreshDailyWallpaper(true);
+                            break;
+                        case Wallpaper.FILE:
+                            pickImageFile();
+                            break;
+                        default:
+                            enterWallpaperLink();
+                            break;
+                    }
+                })
+                .show();
+    }
+
+    private void chooseWallDim() {
+        String[] names = new String[Wallpaper.DIMS.length];
+        int cur = 0;
+        for (int i = 0; i < names.length; i++) {
+            names[i] = Wallpaper.DIMS[i] == 0 ? "Без затемнения" : Wallpaper.DIMS[i] + "%";
+            if (Wallpaper.DIMS[i] == prefs.wallDim()) cur = i;
+        }
+        dialog().setTitle("Затемнение обоев")
+                .setSingleChoiceItems(names, cur, (d, w) -> {
+                    prefs.setWallDim(Wallpaper.DIMS[w]);
+                    applyWallpaper();
+                    d.dismiss();
+                })
+                .show();
+    }
+
+    private void enterWallpaperLink() {
+        final EditText input = new EditText(this);
+        input.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
+        input.setSingleLine(true);
+        input.setHint("https://…/картинка.jpg");
+        FrameLayout box = new FrameLayout(this);
+        box.setPadding(dp(24), dp(8), dp(24), 0);
+        box.addView(input);
+        dialog().setTitle("Ссылка на картинку")
+                .setView(box)
+                .setPositiveButton("Установить", (d, w) -> {
+                    final String url = input.getText().toString().trim();
+                    if (url.isEmpty()) return;
+                    toast("Загружаю картинку…");
+                    worker.execute(() -> {
+                        try {
+                            Wallpaper.download(url.startsWith("http") ? url : "https://" + url, Wallpaper.file(this));
+                            ui.post(() -> {
+                                prefs.setWallMode(Wallpaper.LINK);
+                                applyWallpaper();
+                                toast("Обои установлены");
+                            });
+                        } catch (Exception e) {
+                            final String m = e.getMessage();
+                            ui.post(() -> toast("Не удалось: " + m));
+                        }
+                    });
+                })
+                .setNegativeButton("Отмена", null)
+                .show();
+    }
+
+    /** Сначала системный выбор файла; если его на приставке нет — свой поиск картинок. */
+    private void pickImageFile() {
+        Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT)
+                .addCategory(Intent.CATEGORY_OPENABLE)
+                .setType("image/*");
+        try {
+            startActivityForResult(i, REQ_PICK_IMAGE);
+        } catch (Exception e) {
+            browseImages();
+        }
+    }
+
+    @SuppressWarnings("deprecation")
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode != REQ_PICK_IMAGE) return;
+        if (resultCode != RESULT_OK || data == null || data.getData() == null) return;
+        final Uri uri = data.getData();
+        worker.execute(() -> {
+            try {
+                Wallpaper.copyFromUri(this, uri);
+                ui.post(() -> {
+                    prefs.setWallMode(Wallpaper.FILE);
+                    applyWallpaper();
+                    toast("Обои установлены");
+                });
+            } catch (Exception e) {
+                final String m = e.getMessage();
+                ui.post(() -> toast("Не удалось: " + m));
+            }
+        });
+    }
+
+    private void browseImages() {
+        String perm = Build.VERSION.SDK_INT >= 33
+                ? "android.permission.READ_MEDIA_IMAGES"
+                : "android.permission.READ_EXTERNAL_STORAGE";
+        if (Build.VERSION.SDK_INT >= 23
+                && checkSelfPermission(perm) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(new String[]{perm}, REQ_READ_IMAGES);
+            return;
+        }
+        toast("Ищу картинки на флешках и в памяти…");
+        worker.execute(() -> {
+            final List<File> found = Wallpaper.findImages();
+            ui.post(() -> showImageList(found));
+        });
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] results) {
+        super.onRequestPermissionsResult(requestCode, permissions, results);
+        if (requestCode != REQ_READ_IMAGES) return;
+        if (results.length > 0 && results[0] == android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            browseImages();
+        } else {
+            toast("Без доступа к фото картинку не выбрать");
+        }
+    }
+
+    private void showImageList(List<File> found) {
+        if (found.isEmpty()) {
+            dialog().setTitle("Картинки не найдены")
+                    .setMessage("Скопируйте картинку (JPG или PNG) на флешку или в папку Download "
+                            + "на приставке и попробуйте снова. Или выберите «Картинка по ссылке».")
+                    .setPositiveButton("OK", null)
+                    .show();
+            return;
+        }
+        wallFiles = found;
+        String[] names = new String[found.size()];
+        for (int i = 0; i < names.length; i++) {
+            File f = found.get(i);
+            File parent = f.getParentFile();
+            names[i] = (parent != null ? parent.getName() + " / " : "") + f.getName();
+        }
+        dialog().setTitle("Выберите картинку")
+                .setItems(names, (d, which) -> {
+                    final File src = wallFiles.get(which);
+                    worker.execute(() -> {
+                        try {
+                            Wallpaper.copyFromFile(this, src);
+                            ui.post(() -> {
+                                prefs.setWallMode(Wallpaper.FILE);
+                                applyWallpaper();
+                                toast("Обои установлены");
+                            });
+                        } catch (Exception e) {
+                            final String m = e.getMessage();
+                            ui.post(() -> toast("Не удалось: " + m));
+                        }
+                    });
+                })
+                .show();
+    }
+
     // ------------------------------------------------------------ заставка
 
     private View buildSaver() {
         saverView = new FrameLayout(this);
         saverView.setBackgroundColor(0xFF000000);
+        saverImage = new ImageView(this);
+        saverImage.setScaleType(ImageView.ScaleType.CENTER_CROP);
+        saverImage.setAlpha(0.35f);
+        saverImage.setVisibility(View.GONE);
+        saverView.addView(saverImage, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
         saverView.setVisibility(View.GONE);
         saverView.setFocusable(false);
 
