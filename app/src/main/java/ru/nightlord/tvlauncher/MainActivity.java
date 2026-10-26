@@ -351,6 +351,12 @@ public class MainActivity extends Activity {
         column.addView(buildHeader(), new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
+        // Строка состояния (интернет, YouTube, IP, память) — отдельной строкой под шапкой
+        LinearLayout.LayoutParams statusLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        statusLp.setMargins(-dp(10), dp(2), 0, dp(10));
+        column.addView(statusView, statusLp);
+
         column.addView(sectionTitle("Избранное"));
         favRow = newRow();
         column.addView(wrapRow(favRow));
@@ -439,7 +445,7 @@ public class MainActivity extends Activity {
         header.setOrientation(LinearLayout.HORIZONTAL);
         header.setGravity(Gravity.CENTER_VERTICAL);
         header.setClipChildren(false);
-        header.setPadding(0, 0, 0, dp(16));
+        header.setPadding(0, 0, 0, dp(6));
 
         LinearLayout timeBox = new LinearLayout(this);
         timeBox.setOrientation(LinearLayout.VERTICAL);
@@ -485,8 +491,8 @@ public class MainActivity extends Activity {
         });
         LinearLayout.LayoutParams stLp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        stLp.setMargins(-dp(10), dp(4), 0, 0);
-        timeBox.addView(statusView, stLp);
+        stLp.setMargins(-dp(10), 0, 0, 0);
+        statusView.setLayoutParams(stLp); // добавляется отдельной строкой под шапкой
 
         // Левый блок занимает только оставшееся место — кнопки справа всегда на экране
         timeBox.setMinimumWidth(dp(200));
@@ -501,7 +507,7 @@ public class MainActivity extends Activity {
 
         header.addView(headerButton("🎤", "voice", v -> voiceSearch()));
         header.addView(headerButton("🧹", "clean", v -> cleanMemory()));
-        sleepButton = headerButton("⏾", "sleep", v -> showSleepTimer());
+        sleepButton = headerButton("💤", "sleep", v -> showSleepTimer());
         header.addView(sleepButton);
         settingsButton = headerButton("⚙  Настройки", "settings", v -> showSettings());
         header.addView(settingsButton);
@@ -1710,7 +1716,7 @@ public class MainActivity extends Activity {
     private void updateSleepButton() {
         if (sleepButton == null) return;
         long left = SleepTimer.remaining(this);
-        sleepButton.setText(left > 0 ? "⏾ " + ((left + 59_999) / 60_000) + " мин" : "⏾");
+        sleepButton.setText(left > 0 ? "💤 " + ((left + 59_999) / 60_000) + " мин" : "💤");
     }
 
     private void showSleepTimer() {
@@ -1720,7 +1726,7 @@ public class MainActivity extends Activity {
         items[0] = left > 0 ? "Выключить таймер (осталось " + ((left + 59_999) / 60_000) + " мин)" : "Таймер выключен";
         for (int i = 1; i < mins.length; i++) items[i] = "Через " + mins[i] + " мин";
         items[mins.length] = "Выключить экран сейчас";
-        dialog().setTitle("⏾ Таймер сна")
+        dialog().setTitle("💤 Таймер сна")
                 .setItems(items, (d, which) -> {
                     if (which == 0) {
                         SleepTimer.cancel(this);
