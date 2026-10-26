@@ -472,23 +472,31 @@ public class MainActivity extends Activity {
         statusView.setClickable(true);
         statusView.setTag("status");
         statusView.setOnClickListener(v -> runNetworkTest());
+        // Одна строка: не помещается — обрезается «…», при выборе пультом бежит строкой
+        statusView.setSingleLine(true);
+        statusView.setEllipsize(TextUtils.TruncateAt.END);
+        statusView.setMarqueeRepeatLimit(-1);
         statusView.setOnFocusChangeListener((v, focused) -> {
             statusBg.setColor(focused ? 0x33FFFFFF : 0x00000000);
             statusBg.setStroke(focused ? dp(2) : 0, Themes.accent(prefs.theme()));
             v.setAlpha(focused ? 1f : 0.6f);
+            statusView.setEllipsize(focused ? TextUtils.TruncateAt.MARQUEE : TextUtils.TruncateAt.END);
+            v.setSelected(focused);
         });
         LinearLayout.LayoutParams stLp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         stLp.setMargins(-dp(10), dp(4), 0, 0);
         timeBox.addView(statusView, stLp);
 
-        header.addView(timeBox);
-
-        View spacer = new View(this);
-        header.addView(spacer, new LinearLayout.LayoutParams(0, 1, 1f));
+        // Левый блок занимает только оставшееся место — кнопки справа всегда на экране
+        timeBox.setMinimumWidth(dp(200));
+        header.addView(timeBox, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
 
         weatherView = text(20, 0.9f);
-        weatherView.setPadding(0, 0, dp(28), 0);
+        weatherView.setPadding(dp(16), 0, dp(20), 0);
+        weatherView.setSingleLine(true);
+        weatherView.setEllipsize(TextUtils.TruncateAt.END);
+        weatherView.setMaxWidth(dp(340));
         header.addView(weatherView);
 
         header.addView(headerButton("🎤", "voice", v -> voiceSearch()));
